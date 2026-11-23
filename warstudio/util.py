@@ -14,9 +14,24 @@ def run(cmd, timeout=1800):
     return r.stdout
 
 
+def num(x, default=0.0):
+    """float() that tolerates None, '', 'N/A' and other junk from APIs/ffprobe."""
+    try:
+        v = float(str(x).strip())
+        return v if v == v and v not in (float("inf"), float("-inf")) else default
+    except (TypeError, ValueError):
+        return default
+
+
 def duration(path):
-    out = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)])
-    return float(out.strip())
+    """Media duration in seconds. Falls back to the stream duration when the container says N/A."""
+    out = run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=duration", "-of", "json", str(path)])
+    d = json.loads(out or "{}")
+    vals = [num((d.get("format") or {}).get("duration"))] + [num(s.get("duration")) for s in d.get("streams") or []]
+    best = max(vals) if vals else 0.0
+    if best <= 0:
+        raise RuntimeError(f"cannot read the length of {Path(path).name} (file empty or broken)")
+    return best
 
 
 def download(url, dest, timeout=120):
@@ -37,7 +52,9 @@ def read_json(path, default=None):
 def write_json(path, data):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
+    import os
+    import threading
+    tmp = p.with_suffix(p.suffix + f".{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     tmp.replace(p)
 

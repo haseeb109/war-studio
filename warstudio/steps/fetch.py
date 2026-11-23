@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 
 from ..config import LIBRARY_DIR
-from ..util import read_json, write_json, run, duration, UA
+from ..util import read_json, write_json, run, duration, num, UA
 
 PAD = 1.0
 
@@ -29,8 +29,8 @@ def resolve_dvids(pick, key):
     if not mp4:
         raise RuntimeError("DVIDS asset has no mp4 file")
     pick["video_url"] = mp4[0]["src"]
-    if not pick.get("duration"):
-        pick["duration"] = float(d.get("duration") or 0)
+    if not num(pick.get("duration")):
+        pick["duration"] = num(d.get("duration"))
     return pick
 
 
@@ -46,11 +46,22 @@ def choose_start(src_dur, need, used_offsets):
 
 
 def fetch_one(pick, start, need, out, W, H, fps):
+    """Download `need` seconds from `start`, normalized. Written to a temp file and only renamed into place
+    after it proves playable, so a broken download can never be reused later."""
     vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={fps},format=yuv420p"
     ua = ["-user_agent", UA] if str(pick["video_url"]).startswith("http") else []
-    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start}", *ua, "-i", pick["video_url"],
-         "-t", f"{need:.2f}", "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(out)],
-        timeout=600)
+    out = Path(out)
+    tmp = out.with_name(out.stem + ".part.mp4")
+    try:
+        run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start}", *ua, "-i", pick["video_url"],
+             "-t", f"{need:.2f}", "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(tmp)],
+            timeout=600)
+        got = duration(tmp)
+        if got < min(0.5, need * 0.5):
+            raise RuntimeError(f"clip too short ({got:.2f}s)")
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
     return out
 
 
@@ -75,35 +86,69 @@ def run_step(proj, keys, style, log):
         need = (end - b["start"]) + PAD
         jobs.append((bid, p, need))
 
-    def work(job):
-        bid, p, need = job
-        try:
-            if p["source"] == "dvids" and not p.get("video_url"):
-                resolve_dvids(p, keys.get("DVIDS_API_KEY"))
-            k = f"{p['source']}:{p['id']}"
-            with lock:
-                if p.get("forced_start") is not None:
-                    start = round(float(p["forced_start"]), 2)
-                else:
-                    start = choose_start(float(p.get("duration") or 0), need, used.setdefault(k, []))
-                used.setdefault(k, []).append(start)
-            if p["source"] == "user":
-                return bid, {"file": p["file"], "start": 0, "length": duration(p["file"]), "source": "user",
-                             "id": p["id"], "page_url": "", "credit": "own footage", "title": p.get("title", "")}
-            out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_{int(start * 100)}_{int(need * 100)}.mp4"
-            if not out.exists():
+    def try_one(bid, p, need):
+        if p["source"] == "user":
+            return {"file": p["file"], "start": 0, "length": duration(p["file"]), "source": "user",
+                    "id": p["id"], "page_url": "", "credit": "own footage", "title": p.get("title", "")}
+        if p["source"] == "dvids" and not p.get("video_url"):
+            resolve_dvids(p, keys.get("DVIDS_API_KEY"))
+        k = f"{p['source']}:{p['id']}"
+        with lock:
+            if p.get("forced_start") is not None:
+                start = round(num(p["forced_start"]), 2)
+            else:
+                start = choose_start(num(p.get("duration")), need, used.setdefault(k, []))
+            used.setdefault(k, []).append(start)
+        out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_{int(start * 100)}_{int(need * 100)}.mp4"
+        if out.exists():
+            try:
+                duration(out)
+            except Exception:
+                out.unlink()                      # a broken file from an older version: fetch again
+        if not out.exists():
+            try:
                 fetch_one(p, start, need, out, W, H, fps)
-            return bid, {"file": str(out), "start": start, "length": duration(out), **{x: p[x] for x in ("source", "id", "page_url", "credit", "title")}}
-        except Exception as e:
-            log(f"beat {bid}: fetch failed ({str(e)[:120]})")
-            return bid, None
+            except Exception:
+                if start > 0 and p.get("forced_start") is None:   # some sources can't seek: try from 0
+                    start = 0.0
+                    out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_0_{int(need * 100)}.mp4"
+                    fetch_one(p, start, need, out, W, H, fps)
+                else:
+                    raise
+        return {"file": str(out), "start": start, "length": duration(out),
+                **{x: p.get(x, "") for x in ("source", "id", "page_url", "credit", "title")}}
 
+    def work(job):
+        """The pick first; if it can't be downloaded, the next ranked alternates (up to 3 tries)."""
+        bid, p, need = job
+        tries = [p] + [a for a in (p.get("alternates") or [])
+                       if (a.get("source"), a.get("id")) != (p.get("source"), p.get("id"))]
+        errors = []
+        for n, cand in enumerate(tries[:3]):
+            try:
+                res = try_one(bid, cand, need)
+                if n:
+                    log(f"beat {bid}: first clip failed ({errors[0][:80]}); used ranked alternate #{n + 1}")
+                    switched[bid] = dict(cand, alternates=p.get("alternates") or [])
+                return bid, res
+            except Exception as e:
+                errors.append(str(e)[:160])
+        log(f"beat {bid}: no clip could be downloaded ({' | '.join(errors)[:240]})")
+        return bid, None
+
+    switched = {}
     log(f"downloading {len(jobs)} clip segments")
-    with ThreadPoolExecutor(4) as ex:
+    with ThreadPoolExecutor(6) as ex:
         for n, (bid, res) in enumerate(ex.map(work, jobs), 1):
             fetched[bid] = res
             if n % 10 == 0 or n == len(jobs):
                 write_json(out_path, fetched)
                 log(f"fetch {n}/{len(jobs)}", progress=n / max(len(jobs), 1))
     write_json(out_path, fetched)
+    if switched:                                  # keep picks.json in line with what was really used
+        picks.update(switched)
+        write_json(proj / "picks.json", picks)
+    missing = [b for b, v in fetched.items() if not v]
+    if missing:
+        log(f"fetch done; {len(missing)} beat(s) without footage (they repeat the previous clip): {', '.join(missing[:12])}")
     return fetched

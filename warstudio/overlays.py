@@ -175,23 +175,37 @@ def render_all(overlay_plan, style, work, log, use_hf=True):
     hf = use_hf and hyperframes_available()
     log(f"overlays: {len(overlay_plan)} ({'HyperFrames' if hf else 'PNG fallback'})")
     out = {}
+    todo = []
     for bid, ov in overlay_plan.items():
-        res = None
         key = hashlib.md5(json.dumps({k: ov[k] for k in ("kind", "line1", "line2", "duration")}, sort_keys=True).encode()).hexdigest()[:12]
-        cached_webm, cached_png = work / f"ov_{key}.webm", work / f"ov_{key}.png"
-        if hf and cached_webm.exists():
-            out[bid] = dict(ov, path=str(cached_webm), type="webm")
-            continue
-        if not hf and cached_png.exists():
-            out[bid] = dict(ov, path=str(cached_png), type="png")
-            continue
-        if hf:
-            res = render_webm(ov, style, cached_webm, work)
-            if res is None:
-                hf = False
-                log("HyperFrames render failed once; using PNG overlays for the rest")
-        if res:
-            out[bid] = dict(ov, path=str(res), type="webm")
+        webm, png = work / f"ov_{key}.webm", work / f"ov_{key}.png"
+        if hf and webm.exists():
+            out[bid] = dict(ov, path=str(webm), type="webm")
+        elif not hf and png.exists():
+            out[bid] = dict(ov, path=str(png), type="png")
         else:
-            out[bid] = dict(ov, path=str(render_png(ov, style, cached_png)), type="png")
+            todo.append((bid, ov, webm, png))
+
+    def do_hf(item):
+        bid, ov, webm, png = item
+        return bid, render_webm(ov, style, webm, work)
+
+    if hf and todo:
+        uniq = list({str(t[2]): t for t in todo}.values())     # identical callouts render once
+        first = do_hf(uniq[0])                       # one alone: proves HyperFrames works before going parallel
+        made = {str(uniq[0][2]): first[1]}
+        if first[1] is None:
+            log("HyperFrames render failed; using PNG overlays")
+            hf = False
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(3) as ex:
+                for item, (bid, res) in zip(uniq[1:], ex.map(do_hf, uniq[1:])):
+                    made[str(item[2])] = res
+        for bid, ov, webm, png in todo:
+            if made.get(str(webm)):
+                out[bid] = dict(ov, path=str(webm), type="webm")
+    for bid, ov, webm, png in todo:
+        if bid not in out:
+            out[bid] = dict(ov, path=str(png if png.exists() else render_png(ov, style, png)), type="png")
     return out

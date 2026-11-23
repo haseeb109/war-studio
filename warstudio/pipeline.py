@@ -40,22 +40,28 @@ def create_project(title, script, voice_id, style_id, dummy=False):
 
 
 class Logger:
+    """Thread-safe: steps log from worker threads (fetch, specs, search)."""
+
     def __init__(self, proj):
+        import threading
         self.proj = Path(proj)
         self.status = read_json(self.proj / "status.json", {}) or {}
         self.status.setdefault("log", [])
+        self._lock = threading.Lock()
 
     def set(self, **kw):
-        self.status.update(kw)
-        write_json(self.proj / "status.json", self.status)
+        with self._lock:
+            self.status.update(kw)
+            write_json(self.proj / "status.json", self.status)
 
     def __call__(self, msg, progress=None):
         line = f"{datetime.now():%H:%M:%S}  {msg}"
         print(line, flush=True)
-        self.status["log"] = (self.status["log"] + [line])[-400:]
-        if progress is not None:
-            self.status["progress"] = round(float(progress), 3)
-        write_json(self.proj / "status.json", self.status)
+        with self._lock:
+            self.status["log"] = (self.status["log"] + [line])[-400:]
+            if progress is not None:
+                self.status["progress"] = round(float(progress), 3)
+            write_json(self.proj / "status.json", self.status)
 
 
 def run_project(proj, from_step=None):

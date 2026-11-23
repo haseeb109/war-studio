@@ -109,7 +109,8 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
             active[tid] = (out, text, 0)          # already submitted in an earlier run: just poll it
         else:
             queue.append((out, text))
-    cap = max(1, int(concurrency))
+    full_cap = cap = max(1, int(concurrency))
+    last_busy = 0.0
     done, credits, total = 0, 0, len(items)
     last_progress = time.time()
     wait = 0.0
@@ -121,9 +122,10 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
             try:
                 tid = submit(key, text, voice_id, model_id)
             except Ai33Busy:
-                cap = max(1, min(cap, len(active)))
-                wait = 10.0
-                say(f"ai33 queue is full; waiting and lowering parallel voices to {cap}")
+                new_cap = max(1, min(cap, len(active)))
+                if new_cap != cap:
+                    say(f"ai33 queue is full; waiting and lowering parallel voices to {new_cap}")
+                cap, wait, last_busy = new_cap, 10.0, time.time()
                 break
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
                 net_errors += 1
@@ -135,6 +137,10 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
             active[tid] = (out, text, retries.get(str(out), 0))
             state[str(out)] = tid
             save_state()
+        if cap < full_cap and time.time() - last_busy > 45:
+            cap += 1                              # queue has been fine for a while: speed back up
+            last_busy = time.time()
+            say(f"ai33 queue is free again; parallel voices back to {cap}")
         sleep(max(2.5, wait))
         wait = 0.0
         for tid, (out, text, tries) in list(active.items()):

@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 from ..config import DATA_DIR
-from ..util import read_json, write_json, UA
+from ..util import read_json, write_json, num, UA
 
 CACHE = DATA_DIR / "search_cache"
 
@@ -54,7 +54,7 @@ def search_dvids(q, key, n):
             continue
         out.append({"source": "dvids", "id": rid, "title": r.get("title") or "",
                     "preview_url": _thumb(r.get("thumbnail")) or _thumb(r.get("image")),
-                    "video_url": "", "duration": float(r.get("duration") or 0),
+                    "video_url": "", "duration": num(r.get("duration")),
                     "page_url": r.get("url") or f"https://www.dvidshub.net/video/{rid.split(':')[-1]}",
                     "credit": r.get("credit") or r.get("unit_name") or "DVIDS (public domain)"})
     return out
@@ -71,7 +71,7 @@ def search_pexels(q, key, n):
             continue
         out.append({"source": "pexels", "id": str(v["id"]), "title": v.get("url", "").rstrip("/").split("/")[-1],
                     "preview_url": v.get("image") or "", "video_url": files[0]["link"],
-                    "duration": float(v.get("duration") or 0), "page_url": v.get("url") or "",
+                    "duration": num(v.get("duration")), "page_url": v.get("url") or "",
                     "credit": f"{(v.get('user') or {}).get('name', '')} / Pexels"})
     return out
 
@@ -86,7 +86,7 @@ def search_pixabay(q, key, n):
             continue
         thumb = (vids.get("medium") or {}).get("thumbnail") or best.get("thumbnail") or ""
         out.append({"source": "pixabay", "id": str(h["id"]), "title": h.get("tags") or "",
-                    "preview_url": thumb, "video_url": best["url"], "duration": float(h.get("duration") or 0),
+                    "preview_url": thumb, "video_url": best["url"], "duration": num(h.get("duration")),
                     "page_url": h.get("pageURL") or "", "credit": f"{h.get('user', '')} / Pixabay"})
     return out
 
@@ -113,10 +113,12 @@ def run_step(proj, keys, settings, style, log):
     if not active:
         raise RuntimeError("No footage API key set (DVIDS / Pexels / Pixabay) — add one in Settings")
     log(f"searching footage on: {', '.join(active)}")
-    for i, sp in enumerate(specs):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock = threading.Lock()
+
+    def one(sp):
         bid = str(sp["id"])
-        if bid in done and done[bid]:
-            continue
         cands, seen = [], set()
         queries = list(sp["queries"])
         if sp["footage_class"] == "map":
@@ -128,8 +130,10 @@ def run_step(proj, keys, settings, style, log):
                 try:
                     res = SOURCES[src][1](q, keys[SOURCES[src][0]], n)
                 except SourceDown as e:
-                    log(f"{e}; continuing without {src}")
-                    down.add(src)
+                    with lock:
+                        if src not in down:
+                            down.add(src)
+                            log(f"{e}; continuing without {src}")
                     continue
                 except Exception as e:
                     log(f"{src} search error for '{q}': {str(e)[:120]}")
@@ -142,10 +146,15 @@ def run_step(proj, keys, settings, style, log):
                         cands.append(c)
             if len(cands) >= n:
                 break
-        done[bid] = cands
-        if i % 10 == 0 or i == len(specs) - 1:
-            write_json(out_path, done)
-            log(f"search {i + 1}/{len(specs)}", progress=(i + 1) / len(specs))
+        return bid, cands
+
+    todo = [sp for sp in specs if not done.get(str(sp["id"]))]
+    with ThreadPoolExecutor(3) as ex:
+        for i, (bid, cands) in enumerate(ex.map(one, todo), 1):
+            done[bid] = cands
+            if i % 10 == 0 or i == len(todo):
+                write_json(out_path, done)
+                log(f"search {len(specs) - len(todo) + i}/{len(specs)}", progress=(len(specs) - len(todo) + i) / len(specs))
     write_json(out_path, done)
     empty = sum(1 for v in done.values() if not v)
     log(f"search done; {empty} beats without candidates")

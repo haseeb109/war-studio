@@ -217,3 +217,23 @@ def test_gemini_model_auto_pick_and_404_switch(monkeypatch, tmp_path):
     res, _ = llm.gemini_pick("k", "gemini-3-flash", img, "p")
     assert res["best"] == 2
     llm._GEMINI_MODELS.clear(); llm._GONE.clear()
+
+
+def test_overlays_parallel_dedupe_and_fallback(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_webm(ov, style, out, work):
+        calls.append(ov["line1"])
+        Path(out).write_bytes(b"webm")
+        return out
+    monkeypatch.setattr(overlays, "hyperframes_available", lambda: True)
+    monkeypatch.setattr(overlays, "render_webm", fake_webm)
+    plan = {"1": {"kind": "time", "line1": "17:14", "line2": "", "duration": 2.0},
+            "2": {"kind": "time", "line1": "17:14", "line2": "", "duration": 2.0},
+            "3": {"kind": "measure", "line1": "32 mi", "line2": "51.5 km", "duration": 2.0}}
+    out = overlays.render_all(plan, STYLE, tmp_path / "ov", lambda *a, **k: None)
+    assert sorted(calls) == ["17:14", "32 mi"] and all(v["type"] == "webm" for v in out.values())
+    monkeypatch.setattr(overlays, "render_webm", lambda *a: None)
+    plan2 = {"4": {"kind": "label", "line1": "TOR-M2", "line2": "", "duration": 2.0}}
+    out2 = overlays.render_all(plan2, STYLE, tmp_path / "ov2", lambda *a, **k: None)
+    assert out2["4"]["type"] == "png" and Path(out2["4"]["path"]).exists()

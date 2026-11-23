@@ -115,3 +115,19 @@ def test_stuck_queue_gives_up_cleanly(tmp_path, monkeypatch):
         assert False, "should give up"
     except ai33.Ai33Error as e:
         assert "no progress" in str(e) and "Run again" in str(e)
+
+
+def test_concurrency_recovers_after_queue_clears(tmp_path, monkeypatch):
+    fake = FakeAi33(limit=2)
+    orig = fake.req
+
+    def req(key, path, data=None, timeout=60):
+        if fake.submits >= 6:
+            fake.limit = 10                      # the queue frees up after a while
+        return orig(key, path, data, timeout)
+    fake.req = req
+    items = [(tmp_path / f"s{i}.mp3", f"sentence {i}") for i in range(80)]
+    credits, logs = run(fake, tmp_path, items, monkeypatch, concurrency=4)
+    assert all(p.exists() for p, _ in items) and fake.submits == 80
+    assert any("lowering" in m for m in logs)
+    assert any("back to 4" in m for m in logs)

@@ -10,7 +10,7 @@ from pathlib import Path
 from .. import ROOT
 from ..config import brain_config
 from ..llm import chat, extract_json
-from ..util import read_json, write_json
+from ..util import read_json, write_json, num
 
 CLASSES = {"real", "flir", "cockpit", "control_room", "map"}
 SFX = {"launch", "explosion", "flyby", "gunfire", "flares", "radar", "radio_static", "alarm", "impact"}
@@ -69,13 +69,16 @@ def run_step(proj, keys, settings, log, dummy=False):
             log(f"brain: {brain['label']} / {brain['model']}")
         else:
             log(f"{brain['key_name']} not set: using simple keyword search terms (weaker clip matches)")
-    for c0 in range(0, len(beats), CHUNK):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock = threading.Lock()
+    done_n = [0]
+
+    def do_chunk(c0):
         chunk = beats[c0:c0 + CHUNK]
         ids = {b["id"] for b in chunk}
         if dummy or not brain["key"]:
-            for b in chunk:
-                specs[b["id"]] = fallback_spec(b)
-            continue
+            return {b["id"]: fallback_spec(b) for b in chunk}
         ctx = " ".join(b["text"] for b in beats[max(0, c0 - 6):c0])
         user = (f"VIDEO TITLE: {title}\nPREVIOUS CONTEXT: {ctx}\n\nBEATS:\n" +
                 "\n".join(json.dumps({"id": b["id"], "text": b["text"]}, ensure_ascii=False) for b in chunk))
@@ -84,8 +87,9 @@ def run_step(proj, keys, settings, log, dummy=False):
         for attempt in range(2):
             try:
                 reply, usage = chat(messages, brain)
-                for k in usage_tot:
-                    usage_tot[k] += usage.get(k, 0) or 0
+                with lock:
+                    for k in usage_tot:
+                        usage_tot[k] += usage.get(k, 0) or 0
                 data = extract_json(reply)
                 got, errors = validate(data.get("beats") if isinstance(data, dict) else data, ids)
             except Exception as e:
@@ -96,12 +100,18 @@ def run_step(proj, keys, settings, log, dummy=False):
             log(f"specs chunk {c0}: {len(errors)} problems, repair round" if attempt == 0 else f"specs chunk {c0}: using fallback for {len(ids - set(got))} beats")
             messages = messages + [{"role": "assistant", "content": reply[:6000]},
                                    {"role": "user", "content": "Fix these problems and return the full JSON again:\n" + "\n".join(errors[:15])}]
-        for b in chunk:
-            specs[b["id"]] = got.get(b["id"]) or fallback_spec(b)
-        log(f"specs {min(c0 + CHUNK, len(beats))}/{len(beats)}", progress=min(c0 + CHUNK, len(beats)) / len(beats))
+        out = {b["id"]: got.get(b["id"]) or fallback_spec(b) for b in chunk}
+        with lock:
+            done_n[0] += len(chunk)
+            log(f"specs {done_n[0]}/{len(beats)}", progress=done_n[0] / len(beats))
+        return out
+
+    with ThreadPoolExecutor(3) as ex:
+        for part in ex.map(do_chunk, range(0, len(beats), CHUNK)):
+            specs.update(part)
     result = [specs[b["id"]] for b in beats]
     write_json(out_path, result)
-    cost = (usage_tot["prompt_tokens"] / 1e6 * float(settings.get("brain_price_in_per_m", 0.3)) +
-            usage_tot["completion_tokens"] / 1e6 * float(settings.get("brain_price_out_per_m", 1.2)))
+    cost = (usage_tot["prompt_tokens"] / 1e6 * num(settings.get("brain_price_in_per_m"), 0.3) +
+            usage_tot["completion_tokens"] / 1e6 * num(settings.get("brain_price_out_per_m"), 1.2))
     log(f"specs done ({sum(1 for s in result if s.get('fallback'))} fallback), brain ~${cost:.3f}")
     return result

@@ -155,3 +155,29 @@ def test_timings_recorded(tmp_path, monkeypatch):
     pl.run_project(p, "rank")
     st2 = read_json(p / "status.json")
     assert st2["timings"]["search"] == st["timings"]["search"]
+
+
+def test_fetch_falls_back_to_alternates(tmp_path, monkeypatch):
+    import warstudio.steps.fetch as f
+    monkeypatch.setattr(f, "LIBRARY_DIR", tmp_path / "lib")
+    good = tmp_path / "good.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=green:s=320x180:r=25:d=10",
+         "-c:v", "libx264", "-preset", "ultrafast", str(good)])
+    proj = tmp_path / "p"
+    proj.mkdir()
+    write_json(proj / "beats.json", [{"id": 0, "sid": 0, "text": "x", "start": 0, "end": 2.0}])
+    write_json(proj / "vo.json", {"total": 2.0, "sentences": []})
+    bad = {"source": "test", "id": "bad", "video_url": str(tmp_path / "missing.mp4"), "duration": "N/A"}
+    alt = {"source": "test", "id": "good", "video_url": str(good), "duration": "N/A"}
+    write_json(proj / "picks.json", {"0": dict(bad, alternates=[bad, alt])})
+    logs = []
+    out = f.run_step(proj, {}, load_style("beyond_military"), lambda m, **k: logs.append(m))
+    assert out["0"]["id"] == "good" and out["0"]["length"] > 2.5
+    assert read_json(proj / "picks.json")["0"]["id"] == "good"
+    assert any("alternate #2" in m for m in logs)
+    assert not list((tmp_path / "lib").glob("*.part.mp4"))
+
+
+def test_duration_and_num():
+    from warstudio.util import num
+    assert num("N/A") == 0.0 and num(None, 5) == 5 and num("3.5") == 3.5 and num(float("nan")) == 0.0
