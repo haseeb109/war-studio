@@ -131,3 +131,27 @@ def test_recover_interrupted(tmp_path, monkeypatch):
     write_json(tmp_path / "a" / "status.json", {"state": "running", "log": []})
     assert server.recover_interrupted() == 1
     assert read_json(tmp_path / "a" / "status.json")["state"] == "error"
+
+
+def test_timings_recorded(tmp_path, monkeypatch):
+    from warstudio import pipeline as pl
+    from warstudio.steps import search as srch, rank as rk, fetch as ft
+    monkeypatch.setattr(pl, "PROJECTS_DIR", tmp_path)
+    p = pl.create_project("Timer", "At 17:14 the jet climbs to 28,000 feet. It turns hard right.", "x", "beyond_military", dummy=True)
+    calls = {"n": 0}
+
+    def slow(*a, **k):
+        import time as _t
+        _t.sleep(1.1)
+    monkeypatch.setattr(srch, "run_step", lambda *a, **k: (slow(), write_json(p / "candidates.json", {}))[1])
+    monkeypatch.setattr(rk, "run_step", lambda *a, **k: write_json(p / "picks.json", {}))
+    monkeypatch.setattr(ft, "run_step", lambda *a, **k: write_json(p / "fetched.json", {}))
+    pl.run_project(p)
+    st = read_json(p / "status.json")
+    assert st["state"] == "done" and set(st["timings"]) == set(pl.STEPS)
+    assert st["timings"]["search"] >= 1 and st["total_seconds"] >= 1 and st["last_run_seconds"] > 0
+    assert pl.fmt_duration(3725) == "1h 02m 05s" and pl.fmt_duration(65) == "1m 05s"
+    # re-run from rank: search keeps its old time
+    pl.run_project(p, "rank")
+    st2 = read_json(p / "status.json")
+    assert st2["timings"]["search"] == st["timings"]["search"]

@@ -45,10 +45,11 @@ def _run_apply(proj):
     import traceback
     from .pipeline import Logger
     log = Logger(proj)
-    log.set(state="running", step="render", progress=0, error=None)
+    t0 = time.time()
+    log.set(state="running", step="render", progress=0, error=None, apply_started=t0)
     try:
         edits.apply(proj, log)
-        log.set(state="done", step=None, progress=1)
+        log.set(state="done", step=None, progress=1, last_apply_seconds=round(time.time() - t0, 1))
     except Exception as e:
         log(f"ERROR: {e}")
         log(traceback.format_exc()[-1500:])
@@ -226,6 +227,7 @@ def jobs():
                     "progress": st.get("progress", 0), "has_final": (p.parent / "final.mp4").exists(),
                     "created": meta.get("created"), "seconds": qc.get("video_seconds"), "style": meta.get("style"),
                     "no_footage": len(qc.get("beats_without_footage", [])), "review": rv.get("state", "unreviewed"),
+                    "total_seconds": st.get("total_seconds"), "run_started": st.get("run_started"),
                     "dummy": meta.get("dummy", False)})
     return out
 

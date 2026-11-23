@@ -148,6 +148,7 @@
           <button class="btn ghost" id="copyLog">Copy log</button>
         </div>
         <div class="steps" id="jdSteps"></div>
+        <div id="jdTime" style="margin:4px 0 6px"></div>
         <div id="jdQc" class="muted"></div>
         <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Log and re-run</summary>
           <div style="display:flex;gap:8px;margin:10px 0"><select id="resumeSel" style="width:auto"></select>
@@ -374,6 +375,8 @@ $("#startBtn").onclick = async () => {
 
 const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const fmtT = x => { x = Math.max(0, x || 0); const m = Math.floor(x / 60), s = x - m * 60; return `${m}:${s.toFixed(1).padStart(4, "0")}`; };
+const fmtClock = x => { x = Math.max(0, Math.round(x || 0)); const h = Math.floor(x / 3600), m = Math.floor(x % 3600 / 60), s = x % 60;
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`; };
 const fmtDur = x => x ? `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, "0")}` : "";
 function showSection(id) { document.querySelectorAll("main section").forEach(s => s.classList.toggle("hidden", s.id !== id)); }
 
@@ -397,6 +400,8 @@ function renderLib() {
     if (j.has_final) tags.push(j.review === "reviewed" ? '<span class="tag ok">reviewed</span>' : j.review === "edited" ? '<span class="tag warn">edited</span>' : '<span class="tag">not reviewed</span>');
     if (j.no_footage) tags.push(`<span class="tag bad">${j.no_footage} no footage</span>`);
     if (j.dummy) tags.push('<span class="tag">dry run</span>');
+    if (j.state === "done" && j.total_seconds) tags.push(`<span class="tag">⏱ ${fmtClock(j.total_seconds)}</span>`);
+    if (running && j.run_started) tags.push(`<span class="tag warn">⏱ ${fmtClock(Date.now() / 1000 - j.run_started)}</span>`);
     const date = j.created ? new Date(j.created * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"}) : "";
     return `<div class="vc" data-id="${j.id}"><div class="pv">${pv}${j.seconds ? `<span class="dur">${fmtDur(j.seconds)}</span>` : ""}</div>
       <div class="bd"><b>${esc(j.title || j.id)}</b><div class="muted" style="font-size:12px">${date}</div>${tags.join("")}</div></div>`;
@@ -426,7 +431,17 @@ async function refreshJob() {
   const busy = st.state === "running" || st.state === "queued";
   $("#jdBadges").innerHTML = `<span class="pill ${st.state}">${st.state || ""}${st.step ? " · " + st.step : ""}</span>`;
   const idx = STATUS.steps.indexOf(st.step);
-  $("#jdSteps").innerHTML = STATUS.steps.map((s, i) => `<span class="step ${st.state === "done" || (idx >= 0 && i < idx) ? "ok" : ""} ${s === st.step ? "cur" : ""}">${s}${s === st.step ? " " + Math.round((st.progress || 0) * 100) + "%" : ""}</span>`).join("");
+  const tm = st.timings || {}, now = Date.now() / 1000;
+  $("#jdSteps").innerHTML = STATUS.steps.map((s, i) => {
+    const live = s === st.step && busy && st.step_started ? now - st.step_started : null;
+    const t = live != null ? live : tm[s];
+    return `<span class="step ${st.state === "done" || (idx >= 0 && i < idx) ? "ok" : ""} ${s === st.step ? "cur" : ""}">${s}${s === st.step ? " " + Math.round((st.progress || 0) * 100) + "%" : ""}${t != null ? ` · ${fmtClock(t)}` : ""}</span>`;
+  }).join("");
+  if (busy && (st.run_started || st.apply_started)) $("#jdTime").innerHTML = `<span class="flagtxt">⏱ Running for ${fmtClock(now - Math.max(st.run_started || 0, st.apply_started || 0))}</span>`;
+  else if (st.state === "done" && st.total_seconds) $("#jdTime").innerHTML = `<b>⏱ Made in ${fmtClock(st.total_seconds)}</b>` +
+    (st.last_run_seconds && Math.abs(st.last_run_seconds - st.total_seconds) > 5 ? ` <span class="muted">(last run ${fmtClock(st.last_run_seconds)})</span>` : "") +
+    (st.last_apply_seconds ? ` <span class="muted">· last edit applied in ${fmtClock(st.last_apply_seconds)}</span>` : "");
+  else $("#jdTime").innerHTML = "";
   const sig = f.join() + "|" + (d.qc ? d.qc.video_seconds : "") + "|" + busy;
   if ($("#jdPlayer").dataset.sig !== sig) {
     $("#jdPlayer").dataset.sig = sig;

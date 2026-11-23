@@ -13,6 +13,12 @@ from .util import write_json, read_json
 STEPS = ["voice", "beats", "specs", "search", "rank", "fetch", "render", "qc"]
 
 
+def fmt_duration(sec):
+    sec = int(round(sec or 0))
+    h, m, s = sec // 3600, sec % 3600 // 60, sec % 60
+    return f"{h}h {m:02d}m {s:02d}s" if h else (f"{m}m {s:02d}s" if m else f"{s}s")
+
+
 def slugify(title):
     s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50] or "video"
     base = f"{datetime.now():%Y%m%d-%H%M%S}-{s}"
@@ -71,10 +77,15 @@ def run_project(proj, from_step=None):
             for p in (proj / "segments").glob("*.mp4") if (proj / "segments").exists() else []:
                 p.unlink()
     t0 = time.time()
-    log.set(state="running", error=None)
+    timings = dict(log.status.get("timings") or {})
+    if from_step:                                   # steps that will run again lose their old time
+        for s in STEPS[STEPS.index(from_step):]:
+            timings.pop(s, None)
+    log.set(state="running", error=None, run_started=t0, run_finished=None, timings=timings)
     try:
         for name in STEPS:
-            log.set(step=name, progress=0)
+            ts = time.time()
+            log.set(step=name, progress=0, step_started=ts)
             log(f"--- step: {name}")
             if name == "voice":
                 vo.run_step(proj, keys, settings, meta["voice_id"], log, dummy=dummy)
@@ -92,10 +103,17 @@ def run_project(proj, from_step=None):
                 render.run_step(proj, settings, style, log)
             elif name == "qc":
                 qc.run_step(proj, log)
-        log.set(state="done", step=None, progress=1)
-        log(f"DONE in {(time.time() - t0) / 60:.1f} min -> final.mp4")
+            took = round(time.time() - ts, 1)
+            if took >= 1 or name not in timings:      # a skipped (already done) step keeps its earlier time
+                timings[name] = took
+            log.set(timings=timings)
+        total = round(sum(timings.values()), 1)
+        log.set(state="done", step=None, progress=1, run_finished=time.time(), total_seconds=total,
+                last_run_seconds=round(time.time() - t0, 1))
+        log(f"DONE in {fmt_duration(time.time() - t0)}" + (f" (all steps together: {fmt_duration(total)})"
+                                                           if abs(total - (time.time() - t0)) > 5 else "") + " -> final.mp4")
     except Exception as e:
         log(f"ERROR: {e}")
         log(traceback.format_exc()[-1500:])
-        log.set(state="error", error=str(e)[:500])
+        log.set(state="error", error=str(e)[:500], run_finished=time.time())
         raise
