@@ -1,0 +1,136 @@
+"""Connection tests for every API: used by the Settings "Test" buttons and by System Check.
+
+Each test can take a key that is not saved yet (what the user just pasted), so a key can be checked
+before it is stored. Tests use the smallest real request (a 1-token chat, a 1-result search) and
+never use the search cache, so a wrong key can't hide behind an old cached result.
+"""
+import json
+import time
+
+import httpx
+
+from .config import BRAIN_PRESETS, brain_config, load_keys, load_settings
+from .util import UA
+
+SERVICES = {
+    "AI33_API_KEY": "ai33", "DEEPSEEK_API_KEY": "deepseek", "HIVE_API_KEY": "hive", "CUSTOM_BRAIN_API_KEY": "custom",
+    "GEMINI_API_KEY": "gemini", "DVIDS_API_KEY": "dvids", "PEXELS_API_KEY": "pexels", "PIXABAY_API_KEY": "pixabay",
+}
+
+
+def _get(url, **kw):
+    h = {"User-Agent": UA, **kw.pop("headers", {})}
+    return httpx.get(url, headers=h, timeout=25, **kw)
+
+
+def _http_msg(r):
+    try:
+        d = r.json()
+        msg = d.get("error", d.get("message", d)) if isinstance(d, dict) else d
+        if isinstance(msg, dict):
+            msg = msg.get("message", msg)
+    except Exception:
+        msg = r.text
+    return f"HTTP {r.status_code}: {str(msg)[:180]}"
+
+
+def test_brain(provider, key=None):
+    from .llm import chat, extract_json
+    b = brain_config(provider=provider, key_override=key or None)
+    if not b["key"]:
+        return False, f"{b['key_name']} is empty"
+    t0 = time.time()
+    try:
+        reply, usage = chat([{"role": "user", "content": 'Reply with exactly this JSON: {"ok": true}'}], b, max_tokens=30, timeout=60)
+    except Exception as e:
+        return False, f"{b['label']}: {str(e)[:220]}"
+    try:
+        ok = extract_json(reply).get("ok") is True
+    except Exception:
+        ok = False
+    msg = f"{b['label']} / {b['model']} answered in {time.time() - t0:.1f}s" + ("" if ok else f" (unexpected reply: {reply[:60]})")
+    if provider == "deepseek":
+        try:
+            r = _get("https://api.deepseek.com/user/balance", headers={"Authorization": f"Bearer {b['key']}"})
+            if r.status_code == 200:
+                infos = r.json().get("balance_infos") or []
+                if infos:
+                    msg += " · balance " + ", ".join(f"{i.get('total_balance')} {i.get('currency')}" for i in infos)
+        except Exception:
+            pass
+    return True, msg
+
+
+def test_ai33(key):
+    if not key:
+        return False, "AI33_API_KEY is empty"
+    r = _get("https://api.ai33.pro/v1/task/00000000-0000-0000-0000-000000000000", headers={"xi-api-key": key})
+    if r.status_code == 401:
+        return False, "ai33 rejected the key (401)"
+    from . import ai33
+    vs, source = ai33.list_voices(key)
+    return True, f"key accepted · voice library: {len(vs)} voices ({source})"
+
+
+def test_gemini(key):
+    if not key:
+        return False, "GEMINI_API_KEY is empty"
+    r = _get("https://generativelanguage.googleapis.com/v1beta/models", params={"key": key, "pageSize": 200})
+    if r.status_code >= 400:
+        return False, "Gemini: " + _http_msg(r)
+    names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
+             if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    model = load_settings().get("gemini_model")
+    if model not in names:
+        flash = [n for n in names if "flash" in n and "image" not in n and "tts" not in n][:6]
+        return False, f"key OK, but model '{model}' is not available. Set gemini_model to one of: {', '.join(flash)}"
+    return True, f"key OK · model {model} available"
+
+
+def test_pexels(key):
+    if not key:
+        return False, "PEXELS_API_KEY is empty"
+    r = _get("https://api.pexels.com/videos/search", params={"query": "fighter jet", "per_page": 1}, headers={"Authorization": key})
+    if r.status_code >= 400:
+        return False, "Pexels: " + _http_msg(r)
+    left = r.headers.get("X-Ratelimit-Remaining")
+    return True, f"search OK ({r.json().get('total_results', '?')} results for 'fighter jet')" + (f" · {left} requests left this month" if left else "")
+
+
+def test_pixabay(key):
+    if not key:
+        return False, "PIXABAY_API_KEY is empty"
+    r = _get("https://pixabay.com/api/videos/", params={"key": key, "q": "fighter jet", "per_page": 3})
+    if r.status_code >= 400:
+        return False, "Pixabay: " + _http_msg(r)
+    return True, f"search OK ({r.json().get('totalHits', '?')} results for 'fighter jet')"
+
+
+def test_dvids(key):
+    if not key:
+        return False, "DVIDS_API_KEY is empty"
+    r = _get("https://api.dvidshub.net/search", params={"api_key": key, "type": "video", "q": "fighter jet", "max_results": 1})
+    if r.status_code >= 400:
+        return False, "DVIDS: " + _http_msg(r)
+    d = r.json()
+    if isinstance(d, dict) and d.get("errors"):
+        return False, f"DVIDS: {str(d['errors'])[:180]}"
+    total = (d.get("page_info") or {}).get("total_results") if isinstance(d, dict) else None
+    return True, "search OK" + (f" ({total} videos for 'fighter jet')" if total else "")
+
+
+def test(key_name, key=None):
+    """Test one service. key=None uses the saved key."""
+    svc = SERVICES.get(key_name)
+    if not svc:
+        return False, f"unknown key {key_name}"
+    key = key if key else load_keys().get(key_name, "")
+    try:
+        if svc in BRAIN_PRESETS:
+            return test_brain(svc, key)
+        return {"ai33": test_ai33, "gemini": test_gemini, "pexels": test_pexels,
+                "pixabay": test_pixabay, "dvids": test_dvids}[svc](key)
+    except httpx.HTTPError as e:
+        return False, f"network error: {str(e)[:200]}"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:200]}"

@@ -1,4 +1,4 @@
-"""Brain (OpenAI-compatible chat: Hive DeepSeek by default) and Gemini vision rerank."""
+"""Brain (OpenAI-compatible chat: DeepSeek official API by default) and Gemini vision rerank."""
 import base64
 import json
 import re
@@ -21,9 +21,13 @@ def extract_json(text):
     return json.loads(text[start:])
 
 
-def chat(messages, key, base_url, model, max_tokens=16000, json_mode=True, timeout=300):
+def chat(messages, brain, max_tokens=16000, json_mode=True, timeout=300):
+    """brain: dict from config.brain_config()."""
+    key, base_url, model = brain["key"], brain["url"], brain["model"]
     if not key:
-        raise LLMError("HIVE_API_KEY missing (Settings tab)")
+        raise LLMError(f"{brain['key_name']} missing (Settings tab)")
+    if not base_url or not model:
+        raise LLMError(f"{brain['label']}: base URL or model not set (Settings tab)")
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.3}
     if json_mode:
         body["response_format"] = {"type": "json_object"}

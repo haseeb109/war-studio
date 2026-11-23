@@ -114,7 +114,9 @@ def index():
 
 @app.get("/api/status")
 def status():
+    from .config import BRAIN_PRESETS
     return {"version": VERSION, "keys": masked_keys(), "key_names": KEY_NAMES, "styles": list_styles(),
+            "brain_presets": {k: v["label"] for k, v in BRAIN_PRESETS.items()},
             "settings": load_settings(), "tools": _tools(), "steps": STEPS, "queue": JOBS.qsize()}
 
 
@@ -122,6 +124,18 @@ def status():
 def set_keys(k: Keys):
     save_keys(k.keys)
     return {"ok": True, "keys": masked_keys()}
+
+
+class TestReq(BaseModel):
+    key_name: str
+    key: str = ""
+
+
+@app.post("/api/keys/test")
+def test_key(t: TestReq):
+    from . import connect
+    ok, msg = connect.test(t.key_name, t.key.strip() or None)
+    return {"ok": ok, "message": msg}
 
 
 @app.post("/api/settings")

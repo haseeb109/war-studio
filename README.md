@@ -14,7 +14,7 @@ bash setup_mac.sh          # once: ffmpeg, node, uv, Python packages, CLIP model
 
 Then double-click **`WarStudio.command`** (or `uv run python run.py gui`). The GUI opens at http://127.0.0.1:8765.
 
-1. **Settings** tab: paste your API keys (stored only in `~/.config/warstudio/keys.env`).
+1. **Settings** tab: paste your API keys (stored only in `~/.config/warstudio/keys.env`) and press **Test** next to each one; it checks the key with a tiny real request before you save (DeepSeek also shows your balance).
 2. **Voices** tab: *Load voices from ai33*, preview, star your favorites (favorites show first everywhere).
 3. **Create** tab: title, script, voice, style → *Start production*.
 4. **Videos** tab: your video library. Open a video to watch it, download it, see the contact sheet and footage log, or *Mark as reviewed*.
@@ -35,7 +35,7 @@ Tip: tick **Dry run** for a first test: silent voice and no AI credits, but real
 | Key | Used for | Needed? |
 |---|---|---|
 | `AI33_API_KEY` | Voiceover (ai33.pro, ElevenLabs voices) | Yes (not for dry run) |
-| `HIVE_API_KEY` | Brain: beat -> shot spec (DeepSeek on Hive, OpenAI-compatible; change `brain_base_url` / `brain_model` in Settings for another provider) | Recommended (fallback specs otherwise) |
+| `DEEPSEEK_API_KEY` | Brain: beat -> shot spec. Default provider: DeepSeek official API (`https://api.deepseek.com`, model `deepseek-flash`). Settings → *Script planner* can switch to Hive or any OpenAI-compatible API (`HIVE_API_KEY` / `CUSTOM_BRAIN_API_KEY`) | Recommended (fallback specs otherwise) |
 | `GEMINI_API_KEY` | Rerank: picks the best of the top-5 clips from one collage image | Recommended (CLIP top-1 otherwise) |
 | `DVIDS_API_KEY` | Real US military footage (public domain) — the most important source | At least one footage key |
 | `PEXELS_API_KEY` | Stock footage | |

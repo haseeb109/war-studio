@@ -19,11 +19,27 @@ MUSIC_DIR = ROOT / "assets" / "music"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 FAVORITES_FILE = DATA_DIR / "favorites.json"
 
-KEY_NAMES = ["AI33_API_KEY", "HIVE_API_KEY", "GEMINI_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY", "DVIDS_API_KEY"]
+KEY_NAMES = ["AI33_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "DVIDS_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY",
+             "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"]
+
+# Brain (script -> shot specs). All speak the OpenAI chat-completions format.
+BRAIN_PRESETS = {
+    "deepseek": {"label": "DeepSeek (official API)", "url": "https://api.deepseek.com/chat/completions",
+                 "key": "DEEPSEEK_API_KEY", "model_setting": "deepseek_model"},
+    "hive": {"label": "Hive (DeepSeek resold)", "url": "https://api-cdn.thehive.ai/api/v3/chat/completions",
+             "key": "HIVE_API_KEY", "model_setting": "hive_model"},
+    "custom": {"label": "Custom (any OpenAI-compatible API)", "url": None,
+               "key": "CUSTOM_BRAIN_API_KEY", "model_setting": "custom_model"},
+}
 
 DEFAULT_SETTINGS = {
-    "brain_base_url": "https://api-cdn.thehive.ai/api/v3/chat/completions",
-    "brain_model": "deepseek-ai/deepseek-v4.1-flash-1017",
+    "brain_provider": "deepseek",
+    "deepseek_model": "deepseek-flash",
+    "hive_model": "deepseek-ai/deepseek-v4.1-flash-1017",
+    "custom_base_url": "",
+    "custom_model": "",
+    "brain_price_in_per_m": 0.30,
+    "brain_price_out_per_m": 1.20,
     "gemini_model": "gemini-2.5-flash",
     "tts_model": "eleven_multilingual_v2",
     "tts_concurrency": 4,
@@ -76,6 +92,21 @@ def save_settings(new):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(s, indent=2))
     return s
+
+
+def brain_config(settings=None, keys=None, provider=None, key_override=None):
+    """Resolve which brain to call: {provider, label, url, model, key, key_name}."""
+    settings = settings or load_settings()
+    keys = keys or load_keys()
+    prov = provider or settings.get("brain_provider") or "deepseek"
+    if prov not in BRAIN_PRESETS:
+        prov = "deepseek"
+    pre = BRAIN_PRESETS[prov]
+    url = pre["url"] or settings.get("custom_base_url", "").strip()
+    if url and not url.rstrip("/").endswith("/chat/completions"):
+        url = url.rstrip("/") + "/chat/completions"
+    return {"provider": prov, "label": pre["label"], "url": url, "model": settings.get(pre["model_setting"], ""),
+            "key": (key_override if key_override is not None else keys.get(pre["key"], "")), "key_name": pre["key"]}
 
 
 def list_styles():

@@ -148,3 +148,35 @@ def test_project_names_unique(tmp_path, monkeypatch):
     a = pipeline.slugify("Same Title")
     (tmp_path / a).mkdir()
     assert pipeline.slugify("Same Title") != a
+
+
+def test_brain_config_defaults_to_deepseek(monkeypatch, tmp_path):
+    from warstudio import config
+    monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "s.json")
+    b = config.brain_config(keys={"DEEPSEEK_API_KEY": "k1"})
+    assert b["provider"] == "deepseek" and b["url"] == "https://api.deepseek.com/chat/completions"
+    assert b["model"] == "deepseek-flash" and b["key"] == "k1"
+    c = config.brain_config(settings=dict(config.DEFAULT_SETTINGS, brain_provider="custom", custom_base_url="https://x.ai/v1",
+                                          custom_model="m"), keys={"CUSTOM_BRAIN_API_KEY": "k2"})
+    assert c["url"] == "https://x.ai/v1/chat/completions" and c["model"] == "m" and c["key"] == "k2"
+
+
+def test_connect_brain_and_footage(monkeypatch):
+    from warstudio import connect, llm
+
+    class R:
+        def __init__(self, code, data, headers=None):
+            self.status_code, self._d, self.headers, self.text = code, data, headers or {}, json.dumps(data)
+
+        def json(self):
+            return self._d
+
+    monkeypatch.setattr(llm.httpx, "post", lambda *a, **k: R(200, {"choices": [{"message": {"content": '{"ok": true}'}}], "usage": {}}))
+    monkeypatch.setattr(connect, "_get", lambda url, **k: R(200, {"balance_infos": [{"total_balance": "9.50", "currency": "USD"}]})
+                        if "balance" in url else R(401, {"error": {"message": "Invalid API key"}}))
+    ok, msg = connect.test("DEEPSEEK_API_KEY", "sk-test")
+    assert ok and "DeepSeek" in msg and "9.50 USD" in msg
+    ok, msg = connect.test("PEXELS_API_KEY", "bad")
+    assert not ok and "401" in msg and "Invalid API key" in msg
+    ok, msg = connect.test("PIXABAY_API_KEY", "")
+    assert not ok and "empty" in msg

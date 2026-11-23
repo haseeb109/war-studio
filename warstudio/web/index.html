@@ -72,6 +72,9 @@
   .ev{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:5px;font-size:13px}
   .ev button{margin-left:auto;background:none;border:0;color:var(--red);cursor:pointer;font-size:16px}
   .rv-bar{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;background:#0a0c10;border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-top:4px}
+  .keyrow{display:grid;grid-template-columns:200px minmax(0,1fr) auto;gap:10px;align-items:center;margin-top:10px}
+  .keyrow .lab{font-size:13px}.keyrow .lab span{display:block;color:var(--muted);font-size:12px}
+  .keyres{grid-column:2/4;font-size:13px;margin-top:-4px}
   .flagtxt{color:var(--yel);font-size:13px}
   #toast{position:fixed;bottom:20px;right:20px;background:var(--panel2);border:1px solid var(--line);padding:12px 16px;border-radius:10px;display:none;max-width:420px}
 </style>
@@ -213,10 +216,21 @@
   <!-- SETTINGS -->
   <section id="tab-settings" class="hidden">
     <div class="card">
+      <h2>Script planner (brain)</h2>
+      <p class="muted">Turns every sentence into footage search terms, footage type and callouts. Default: DeepSeek official API.</p>
+      <div class="row">
+        <div><label>Provider</label><select id="brainProv"></select></div>
+        <div><label>Model</label><input id="brainModel"></div>
+        <div id="brainUrlWrap" class="hidden"><label>Base URL (OpenAI-compatible)</label><input id="brainUrl" placeholder="https://api.example.com/v1"></div>
+      </div>
+      <div id="brainKeyRow"></div>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center"><button class="btn" id="saveBrain">Save brain settings</button><span class="muted" id="brainMsg"></span></div>
+    </div>
+    <div class="card">
       <h2>API keys</h2>
-      <p class="muted">Stored only on this Mac in ~/.config/warstudio/keys.env. Leave a field empty to keep the current key.</p>
+      <p class="muted">Stored only on this Mac in ~/.config/warstudio/keys.env. Paste a key and press <b>Test</b> to check it before saving. Leave a field empty to keep the current key.</p>
       <div id="keyFields"></div>
-      <div style="margin-top:14px"><button class="btn" id="saveKeys">Save keys</button></div>
+      <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" id="saveKeys">Save keys</button><button class="btn ghost" id="testAll">Test all saved keys</button></div>
     </div>
     <div class="card">
       <h2>Settings</h2>
@@ -271,9 +285,28 @@ async function loadStatus() {
   STATUS = await api("/api/status");
   $("#ver").textContent = "v" + STATUS.version;
   $("#styleSel").innerHTML = STATUS.styles.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
-  $("#keyFields").innerHTML = STATUS.key_names.map(k => `<label>${k} <span class="muted">${STATUS.keys[k] ? "current: " + STATUS.keys[k] : "not set"}</span></label><input type="password" data-key="${k}" placeholder="paste new key">`).join("");
+  const KEYINFO = {AI33_API_KEY: "Voiceover · ai33.pro", DEEPSEEK_API_KEY: "Script planner · platform.deepseek.com",
+    GEMINI_API_KEY: "Clip rerank · aistudio.google.com/apikey", DVIDS_API_KEY: "Real military footage · api.dvidshub.net",
+    PEXELS_API_KEY: "Stock footage · pexels.com/api", PIXABAY_API_KEY: "Stock footage · pixabay.com/api/docs",
+    HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom"};
+  const brainKeys = ["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"];
+  const keyRow = k => `<div class="keyrow"><div class="lab"><b>${k}</b><span>${KEYINFO[k] || ""}</span></div>
+      <input type="password" data-key="${k}" placeholder="${STATUS.keys[k] ? "current: " + STATUS.keys[k] : "not set — paste key"}">
+      <button class="btn ghost" data-test="${k}">Test</button><div class="keyres" id="res_${k}"></div></div>`;
+  $("#keyFields").innerHTML = STATUS.key_names.filter(k => !brainKeys.includes(k)).map(keyRow).join("");
   const S = STATUS.settings;
-  $("#setFields").innerHTML = Object.keys(S).map(k => `<label>${k}</label><input data-set="${k}" value="${String(S[k]).replace(/"/g, "&quot;")}">`).join("");
+  $("#brainProv").innerHTML = Object.entries(STATUS.brain_presets).map(([k, v]) => `<option value="${k}" ${k === S.brain_provider ? "selected" : ""}>${v}</option>`).join("");
+  const drawBrain = () => {
+    const pv = $("#brainProv").value, mk = {deepseek: "deepseek_model", hive: "hive_model", custom: "custom_model"}[pv];
+    $("#brainModel").value = S[mk] || ""; $("#brainModel").dataset.set = mk;
+    $("#brainUrlWrap").classList.toggle("hidden", pv !== "custom"); $("#brainUrl").value = S.custom_base_url || "";
+    $("#brainKeyRow").innerHTML = keyRow({deepseek: "DEEPSEEK_API_KEY", hive: "HIVE_API_KEY", custom: "CUSTOM_BRAIN_API_KEY"}[pv]);
+    bindTests();
+  };
+  $("#brainProv").onchange = drawBrain;
+  const hide = ["brain_provider", "deepseek_model", "hive_model", "custom_base_url", "custom_model"];
+  $("#setFields").innerHTML = Object.keys(S).filter(k => !hide.includes(k)).map(k => `<label>${k}</label><input data-set="${k}" value="${String(S[k]).replace(/"/g, "&quot;")}">`).join("");
+  drawBrain();
   const T = STATUS.tools;
   $("#tools").innerHTML = Object.entries(T).map(([k, v]) => `<span class="${v ? "ok" : "bad"}">${v ? "&#10003;" : "&#10007;"} ${k}</span>`).join("");
 }
@@ -594,6 +627,38 @@ $("#rvApply").onclick = async () => {
   setTimeout(poll, 800);
 };
 
+function bindTests() {
+  document.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.test, inp = document.querySelector(`input[data-key="${k}"]`), out = $("#res_" + k);
+    b.disabled = true; out.innerHTML = '<span class="muted">Testing…</span>';
+    try {
+      if (["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"].includes(k)) await saveBrain(true);
+      const r = await api("/api/keys/test", {key_name: k, key: inp ? inp.value : ""});
+      out.innerHTML = `<span style="color:${r.ok ? "var(--green)" : "var(--red)"}">${r.ok ? "✓" : "✗"} ${esc(r.message)}</span>`;
+    } catch (e) { out.innerHTML = `<span style="color:var(--red)">✗ ${esc(e.message)}</span>`; }
+    finally { b.disabled = false; }
+  });
+}
+async function saveBrain(quiet) {
+  const s = {brain_provider: $("#brainProv").value, custom_base_url: $("#brainUrl").value};
+  s[$("#brainModel").dataset.set] = $("#brainModel").value.trim();
+  const r = await api("/api/settings", {settings: s});
+  STATUS.settings = r.settings;
+  if (!quiet) { $("#brainMsg").textContent = "Saved"; setTimeout(() => $("#brainMsg").textContent = "", 2500); }
+}
+$("#saveBrain").onclick = async () => {
+  await saveBrain(false);
+  const k = document.querySelector("#brainKeyRow input[data-key]");
+  if (k && k.value.trim()) { await api("/api/keys", {keys: {[k.dataset.key]: k.value.trim()}}); toast("Brain settings and key saved"); await loadStatus(); }
+};
+$("#testAll").onclick = async () => {
+  for (const b of document.querySelectorAll("#keyFields [data-test], #brainKeyRow [data-test]")) {
+    const k = b.dataset.test;
+    if (!STATUS.keys[k]) { $("#res_" + k).innerHTML = '<span class="muted">not set</span>'; continue; }
+    b.click(); await new Promise(r => setTimeout(r, 300));
+    while (b.disabled) await new Promise(r => setTimeout(r, 300));
+  }
+};
 $("#saveKeys").onclick = async () => {
   const keys = {}; document.querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
   await api("/api/keys", {keys}); toast("Keys saved"); await loadStatus();
@@ -657,6 +722,7 @@ $("#diagCopy").onclick = async () => {
   await loadStatus(); await loadVoices(false);
   const h = location.hash.slice(1).split("/");
   if (h[0] === "videos") document.querySelector('nav button[data-tab="jobs"]').click();
+  else if (["create", "voices", "settings", "check"].includes(h[0])) document.querySelector(`nav button[data-tab="${h[0]}"]`).click();
   else if (h[0] === "video" && h[1]) { document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.tab === "jobs")); await loadJobs(); openJob(h[1]); }
   else if (h[0] === "review" && h[1]) { await loadJobs(); openReview(h[1]); }
 })();

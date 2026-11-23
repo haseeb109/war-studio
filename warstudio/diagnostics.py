@@ -271,14 +271,13 @@ def chk_ai33_tts(c):
 
 
 def chk_brain():
-    keys, s = load_keys(), load_settings()
-    if not keys.get("HIVE_API_KEY"):
-        return "warn", "HIVE_API_KEY not set: shot specs will use simple keyword fallback (worse matches)"
-    from .llm import chat, extract_json
-    reply, usage = chat([{"role": "user", "content": 'Return exactly this JSON: {"ok": true}'}], keys["HIVE_API_KEY"],
-                        s["brain_base_url"], s["brain_model"], max_tokens=50)
-    ok = extract_json(reply).get("ok") is True
-    return ("ok" if ok else "warn"), f"{s['brain_model']} replied {'valid JSON' if ok else 'unexpected: ' + reply[:80]}"
+    from .config import brain_config
+    from .connect import test_brain
+    b = brain_config()
+    if not b["key"]:
+        return "warn", f"{b['key_name']} not set: shot specs will use simple keyword fallback (worse matches)"
+    ok, msg = test_brain(b["provider"])
+    return ("ok" if ok else "fail"), msg
 
 
 def chk_gemini():
@@ -421,7 +420,7 @@ def run_all(full=False, on_update=None):
     c.run("Audio", "background music", chk_music)
     c.run("APIs", "keys", chk_keys)
     c.run("APIs", "ai33 key + voice library", chk_ai33_key)
-    c.run("APIs", "brain (Hive)", chk_brain)
+    c.run("APIs", "brain (script planner)", chk_brain)
     c.run("APIs", "Gemini key + model", chk_gemini)
     for src in ("dvids", "pexels", "pixabay"):
         c.run("Footage", f"{src}", _source_check(c, src, full))

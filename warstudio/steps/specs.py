@@ -1,4 +1,4 @@
-"""Step 3: beats -> shot specs (queries, footage class, entity, label, sfx) via the brain (Hive DeepSeek).
+"""Step 3: beats -> shot specs (queries, footage class, entity, label, sfx) via the brain (DeepSeek official API by default).
 
 Beats go in chunks of 40 with the surrounding script for context. Every reply is validated; a bad
 reply gets one repair round, then a deterministic fallback spec so the run never stops.
@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from .. import ROOT
+from ..config import brain_config
 from ..llm import chat, extract_json
 from ..util import read_json, write_json
 
@@ -62,10 +63,16 @@ def run_step(proj, keys, settings, log, dummy=False):
     title = (proj / "title.txt").read_text(encoding="utf-8").strip() if (proj / "title.txt").exists() else ""
     system = (ROOT / "prompts" / "shot_spec.md").read_text(encoding="utf-8")
     specs, usage_tot = {}, {"prompt_tokens": 0, "completion_tokens": 0}
+    brain = brain_config(settings, keys)
+    if not dummy:
+        if brain["key"]:
+            log(f"brain: {brain['label']} / {brain['model']}")
+        else:
+            log(f"{brain['key_name']} not set: using simple keyword search terms (weaker clip matches)")
     for c0 in range(0, len(beats), CHUNK):
         chunk = beats[c0:c0 + CHUNK]
         ids = {b["id"] for b in chunk}
-        if dummy:
+        if dummy or not brain["key"]:
             for b in chunk:
                 specs[b["id"]] = fallback_spec(b)
             continue
@@ -76,7 +83,7 @@ def run_step(proj, keys, settings, log, dummy=False):
         got = {}
         for attempt in range(2):
             try:
-                reply, usage = chat(messages, keys.get("HIVE_API_KEY"), settings["brain_base_url"], settings["brain_model"])
+                reply, usage = chat(messages, brain)
                 for k in usage_tot:
                     usage_tot[k] += usage.get(k, 0) or 0
                 data = extract_json(reply)
@@ -94,6 +101,7 @@ def run_step(proj, keys, settings, log, dummy=False):
         log(f"specs {min(c0 + CHUNK, len(beats))}/{len(beats)}", progress=min(c0 + CHUNK, len(beats)) / len(beats))
     result = [specs[b["id"]] for b in beats]
     write_json(out_path, result)
-    cost = usage_tot["prompt_tokens"] / 1e6 * 0.10 + usage_tot["completion_tokens"] / 1e6 * 0.35
+    cost = (usage_tot["prompt_tokens"] / 1e6 * float(settings.get("brain_price_in_per_m", 0.3)) +
+            usage_tot["completion_tokens"] / 1e6 * float(settings.get("brain_price_out_per_m", 1.2)))
     log(f"specs done ({sum(1 for s in result if s.get('fallback'))} fallback), brain ~${cost:.3f}")
     return result
