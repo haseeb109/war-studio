@@ -45,8 +45,12 @@ def _thumb(v):
 
 
 def search_dvids(q, key, n):
+    # thumb_width/height: DVIDS defaults to 122x92 thumbnails, far too small for CLIP/Gemini to judge,
+    # which made DVIDS clips lose every ranking against Pixabay's 640px previews.
     d = _cached_get("dvids", "https://api.dvidshub.net/search",
-                    {"api_key": key, "type": "video", "q": q, "max_results": n})
+                    {"api_key": key, "type": "video", "q": q, "max_results": min(50, n),
+                     "thumb_width": 640, "thumb_height": 360, "sort": "score", "sortdir": "desc",
+                     "aspect_ratio": "landscape"})
     out = []
     for r in d.get("results") or []:
         rid = str(r.get("id") or "")
@@ -56,7 +60,8 @@ def search_dvids(q, key, n):
                     "preview_url": _thumb(r.get("thumbnail")) or _thumb(r.get("image")),
                     "video_url": "", "duration": num(r.get("duration")),
                     "page_url": r.get("url") or f"https://www.dvidshub.net/video/{rid.split(':')[-1]}",
-                    "credit": r.get("credit") or r.get("unit_name") or "DVIDS (public domain)"})
+                    "credit": r.get("credit") or r.get("unit_name") or "DVIDS (public domain)",
+                    "license": "Public domain (US DoD / DVIDS)"})
     return out
 
 
@@ -91,12 +96,77 @@ def search_pixabay(q, key, n):
     return out
 
 
-SOURCES = {"dvids": ("DVIDS_API_KEY", search_dvids), "pexels": ("PEXELS_API_KEY", search_pexels),
-           "pixabay": ("PIXABAY_API_KEY", search_pixabay)}
+FREE_LICENSES = ("public domain", "pd-", "cc0", "cc-zero", "cc by", "cc-by")
+
+
+def commons_license_ok(lic, allow_sa=False):
+    l = (lic or "").lower().replace("-", " ")
+    if any(x in l for x in ("public domain", "pd ", "cc0", "cc zero")) or l.startswith("pd"):
+        return True
+    if "cc by" in l and "nc" not in l.split() and "nd" not in l.split():
+        return allow_sa or "sa" not in l.split()
+    return False
+
+
+def _strip_html(s):
+    import re
+    return re.sub(r"<[^>]+>", "", s or "").strip()
+
+
+def search_commons(q, key, n, allow_sa=False):
+    """Wikimedia Commons videos (no key). Only public domain, CC0 and CC BY (CC BY-SA if allowed in Settings).
+    Has Russian MoD (mil.ru, CC BY 4.0), Tasnim (Iran, CC BY 4.0), many DoD and national-forces clips."""
+    d = _cached_get("commons", "https://commons.wikimedia.org/w/api.php",
+                    {"action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
+                     "gsrsearch": f"filetype:video {q}", "gsrlimit": min(50, n * 2), "prop": "imageinfo",
+                     "iiprop": "url|size|mime|extmetadata", "iiurlwidth": 640},
+                    headers={"User-Agent": "WarStudio/0.5 (https://github.com/haseeb109/war-studio)"})
+    out = []
+    pages = sorted(((d.get("query") or {}).get("pages") or {}).values(), key=lambda p: p.get("index", 0))
+    for p in pages:
+        ii = (p.get("imageinfo") or [{}])[0]
+        mime = ii.get("mime") or ""
+        if not mime.startswith("video/") or not ii.get("url") or not ii.get("thumburl"):
+            continue
+        meta = ii.get("extmetadata") or {}
+        lic = (meta.get("LicenseShortName") or {}).get("value", "")
+        if not commons_license_ok(lic, allow_sa):
+            continue
+        artist = _strip_html((meta.get("Artist") or {}).get("value", "")) or "Wikimedia Commons"
+        title = (p.get("title") or "").replace("File:", "").rsplit(".", 1)[0]
+        out.append({"source": "commons", "id": str(p.get("pageid")), "title": title,
+                    "preview_url": ii["thumburl"], "video_url": ii["url"], "duration": num(ii.get("duration")),
+                    "page_url": ii.get("descriptionurl") or "", "credit": f"{artist} / Wikimedia Commons / {lic}",
+                    "license": lic})
+        if len(out) >= n:
+            break
+    return out
+
+
+SOURCES = {"dvids": ("DVIDS_API_KEY", search_dvids), "commons": (None, search_commons),
+           "pexels": ("PEXELS_API_KEY", search_pexels), "pixabay": ("PIXABAY_API_KEY", search_pixabay)}
+
+
+def source_ready(src, keys, settings=None):
+    k = SOURCES[src][0]
+    if k is None:
+        return str((settings or {}).get(f"use_{src}", True)).lower() not in ("false", "0", "no")
+    return bool(keys.get(k))
+
+
+def call_source(src, q, keys, n, settings=None):
+    kname, fn = SOURCES[src]
+    if src == "commons":
+        allow = str((settings or {}).get("commons_allow_sharealike", False)).lower() in ("true", "1", "yes")
+        return fn(q, None, n, allow_sa=allow)
+    return fn(q, keys[kname], n)
 
 
 def order_for(fc, style):
     order = list(style["footage"]["source_order"])
+    for s in SOURCES:
+        if s not in order:
+            order.append(s)
     if fc == "map":
         order = [s for s in order if s != "dvids"] + ["dvids"]
     return order
@@ -109,9 +179,9 @@ def run_step(proj, keys, settings, style, log):
     specs = read_json(proj / "specs.json")
     n = int(settings.get("candidates_per_query", 12))
     down = set()
-    active = [s for s, (k, _) in SOURCES.items() if keys.get(k)]
+    active = [s for s in SOURCES if source_ready(s, keys, settings)]
     if not active:
-        raise RuntimeError("No footage API key set (DVIDS / Pexels / Pixabay) — add one in Settings")
+        raise RuntimeError("No footage source available (DVIDS / Pexels / Pixabay keys, or Wikimedia Commons) — check Settings")
     log(f"searching footage on: {', '.join(active)}")
     import threading
     from concurrent.futures import ThreadPoolExecutor
@@ -128,7 +198,7 @@ def run_step(proj, keys, settings, style, log):
                 if src in down or src not in active:
                     continue
                 try:
-                    res = SOURCES[src][1](q, keys[SOURCES[src][0]], n)
+                    res = call_source(src, q, keys, n, settings)
                 except SourceDown as e:
                     with lock:
                         if src not in down:
@@ -157,5 +227,8 @@ def run_step(proj, keys, settings, style, log):
                 log(f"search {len(specs) - len(todo) + i}/{len(specs)}", progress=(len(specs) - len(todo) + i) / len(specs))
     write_json(out_path, done)
     empty = sum(1 for v in done.values() if not v)
-    log(f"search done; {empty} beats without candidates")
+    from collections import Counter
+    mix = Counter(c["source"] for v in done.values() for c in (v or []))
+    log(f"search done; {empty} beats without candidates; candidates per source: " +
+        (", ".join(f"{s} {n}" for s, n in mix.most_common()) or "none"))
     return done

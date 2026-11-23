@@ -50,7 +50,7 @@ One key per service. Searches are cached in `data/search_cache`, so repeated que
 | 1 | voice | Script split into sentences; one ai33 voice file per sentence; measured durations give exact sentence timing | `vo/`, `vo.wav`, `vo.json` |
 | 2 | beats | One shot per sentence; first 3 minutes: sentences >= 3.2 s get 2 shots; any shot > 6 s is split | `beats.json` |
 | 3 | specs | Brain writes per beat: 3 search queries (literal first), footage class, exact entity, wrong matches to avoid, ID label, SFX events | `specs.json` |
-| 4 | search | DVIDS -> Pexels -> Pixabay; metadata + preview images only | `candidates.json` |
+| 4 | search | DVIDS -> Wikimedia Commons (no key) -> Pexels -> Pixabay; metadata + 640px previews only | `candidates.json` |
 | 5 | rank | CLIP (local, MPS) scores previews vs narration -> top 5 -> numbered collage -> Gemini picks the winner. Same source clip not reused within 90 s | `picks.json`, `previews/` |
 | 6 | fetch | Downloads only beat length + 1 s of each winner, normalized to 1080p30, into `library/raw/` (kept for the future library phase) | `fetched.json` |
 | 7 | render | Per beat: slow drift, footage-class grade (FLIR = mono/contrast/noise), overlay baked in, exact frame count from the timeline. Stream-copy join. Voice + SFX + music mix, two-pass loudnorm | `final.mp4` |
@@ -80,4 +80,4 @@ If `npx hyperframes` works and ffmpeg has `libvpx-vp9`, callouts are rendered as
 
 - Shared clip library with index, dedupe, usage ledger, rerank cache (clips are already being saved to `library/raw/`).
 - Animated 3D maps (map beats currently use aerial/satellite stock footage).
-- Licensing: DVIDS footage is public domain; Pexels/Pixabay follow their licenses. `footage_log.csv` records the source of every shot.
+- Licensing: DVIDS footage is public domain; Wikimedia Commons clips are limited to public domain / CC0 / CC BY (CC BY-SA only if `commons_allow_sharealike` is true); Pexels/Pixabay follow their licenses. `footage_log.csv` records source and license of every shot, and `credits.txt` holds the attribution lines to paste into the YouTube description (required for CC BY clips).

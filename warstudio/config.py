@@ -50,6 +50,8 @@ DEFAULT_SETTINGS = {
     "music_file": "",
     "encoder": "auto",
     "hyperframes": True,
+    "use_commons": True,
+    "commons_allow_sharealike": False,
 }
 
 

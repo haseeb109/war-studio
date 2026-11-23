@@ -310,9 +310,9 @@ def _source_check(c, src, deep):
         from .steps import search, fetch
         keys = load_keys()
         kname, fn = search.SOURCES[src]
-        if not keys.get(kname):
+        if kname and not keys.get(kname):
             return "warn", f"{kname} not set"
-        res = fn("fighter jet", keys[kname], 5)
+        res = search.call_source(src, "fighter jet", keys, 5)
         if not res:
             return "warn", "key works but 0 results for 'fighter jet'"
         p = res[0]
@@ -416,7 +416,7 @@ def run_all(full=False, on_update=None):
     c.run("APIs", "ai33 key + voice library", chk_ai33_key)
     c.run("APIs", "brain (script planner)", chk_brain)
     c.run("APIs", "Gemini key + model", chk_gemini)
-    for src in ("dvids", "pexels", "pixabay"):
+    for src in ("dvids", "commons", "pexels", "pixabay"):
         c.run("Footage", f"{src}", _source_check(c, src, full))
     if full:
         c.run("Full", "HyperFrames overlay render", chk_hyperframes(c))

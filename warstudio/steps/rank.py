@@ -59,6 +59,26 @@ def clip_scores(settings, text, image_paths):
     return scores
 
 
+def diverse_top(cands, k, per_source_min=2):
+    """CLIP top-k, but every source that has candidates keeps up to `per_source_min` seats, so one
+    source with sharper previews can't crowd the others out before Gemini sees them."""
+    ranked = sorted(cands, key=lambda c: -c.get("clip_score", -1))
+    top = ranked[:k]
+    for src in {c.get("source") for c in ranked}:
+        have = sum(1 for c in top if c.get("source") == src)
+        extra = [c for c in ranked if c.get("source") == src and c not in top][:max(0, per_source_min - have)]
+        for c in extra:
+            counts = {}
+            for t in top:
+                counts[t.get("source")] = counts.get(t.get("source"), 0) + 1
+            victims = [t for t in reversed(top) if counts[t.get("source")] > per_source_min]
+            if not victims:
+                break
+            top.remove(victims[0])
+            top.append(c)
+    return sorted(top, key=lambda c: -c.get("clip_score", -1))
+
+
 def make_collage(paths, out):
     tw, th = 512, 288
     cols = 3 if len(paths) > 4 else 2
@@ -147,7 +167,7 @@ def run_step(proj, keys, settings, style, log):
             if any(a.lower() in title for a in sp.get("avoid") or [] if a):
                 s -= 0.05
             c["clip_score"] = round(s, 4)
-        top = sorted(cl, key=lambda c: -c["clip_score"])[:k]
+        top = diverse_top(cl, k)
         winner, gscore, scores = top[0], None, None
         if gem and gem_fail >= 3:
             log("Gemini failed 3 times in a row; using CLIP only for the rest of this run")
@@ -186,7 +206,10 @@ def run_step(proj, keys, settings, style, log):
             write_json(out_path, picks)
             log(f"rank {int(bid) + 1}/{len(beats)}", progress=(int(bid) + 1) / len(beats))
     write_json(out_path, picks)
-    log(f"rank done; {sum(1 for v in picks.values() if not v)} beats without a pick")
+    from collections import Counter
+    mix = Counter((v or {}).get("source", "none") for v in picks.values())
+    log(f"rank done; {sum(1 for v in picks.values() if not v)} beats without a pick; picks per source: " +
+        ", ".join(f"{a} {b}" for a, b in mix.most_common()))
     return picks
 
 

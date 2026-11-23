@@ -31,6 +31,26 @@ def contact_sheet(proj, beats, picks, out, cols=6):
     im.save(out, quality=80)
 
 
+def write_credits(proj, beats, fetched):
+    """credits.txt for the YouTube description. CC BY clips (Wikimedia Commons) must be attributed;
+    DVIDS asks for a courtesy credit. Pexels/Pixabay need none but are listed for completeness."""
+    seen, lines = set(), []
+    for b in beats:
+        f = fetched.get(str(b["id"])) or {}
+        k = (f.get("source"), f.get("id"))
+        if not f or k in seen or f.get("source") == "user":
+            continue
+        seen.add(k)
+        lic = f.get("license") or {"pexels": "Pexels License", "pixabay": "Pixabay Content License"}.get(f.get("source"), "")
+        lines.append(f"- {f.get('title') or f.get('id')} | {f.get('credit', '')} | {lic} | {f.get('page_url', '')}")
+    must = [l for l in lines if "cc by" in l.lower() or "cc-by" in l.lower()]
+    txt = "FOOTAGE CREDITS\n"
+    if must:
+        txt += "\nRequired attribution (CC BY / CC BY-SA):\n" + "\n".join(must) + "\n"
+    txt += "\nAll sources:\n" + "\n".join(lines) + "\n"
+    (Path(proj) / "credits.txt").write_text(txt)
+
+
 def run_step(proj, log):
     proj = Path(proj)
     beats = read_json(proj / "beats.json")
@@ -40,13 +60,16 @@ def run_step(proj, log):
     contact_sheet(proj, beats, picks, proj / "contact_sheet.jpg")
     with open(proj / "footage_log.csv", "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["beat", "start", "end", "text", "source", "id", "source_offset", "page_url", "credit"])
+        w.writerow(["beat", "start", "end", "text", "source", "id", "source_offset", "page_url", "credit", "license"])
         for b in beats:
             f = fetched.get(str(b["id"])) or {}
             w.writerow([b["id"], b["start"], b["end"], b["text"], f.get("source", ""), f.get("id", ""),
-                        f.get("start", ""), f.get("page_url", ""), f.get("credit", "")])
+                        f.get("start", ""), f.get("page_url", ""), f.get("credit", ""), f.get("license", "")])
+    write_credits(proj, beats, fetched)
     final = proj / "final.mp4"
+    from collections import Counter
     qc = {"beats": len(beats), "vo_seconds": vo["total"],
+          "footage_by_source": dict(Counter((fetched.get(str(b["id"])) or {}).get("source", "none") for b in beats)),
           "beats_without_footage": [b["id"] for b in beats if not fetched.get(str(b["id"]))]}
     if final.exists():
         qc["video_seconds"] = round(duration(final), 3)

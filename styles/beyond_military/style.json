@@ -18,7 +18,7 @@
   "footage": {
     "_note": "~60% real archival, ~20% FLIR/targeting pod, ~10% maps, ~10% control room / cockpit screens. Literal match: exact aircraft/ship/weapon named in narration must be the one on screen.",
     "classes": ["real", "flir", "cockpit", "control_room", "map"],
-    "source_order": ["dvids", "pexels", "pixabay"],
+    "source_order": ["dvids", "commons", "pexels", "pixabay"],
     "same_source_cooldown_seconds": 90,
     "motion": {"drift": true, "drift_scale": 1.06}
   },

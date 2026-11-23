@@ -495,14 +495,16 @@ def apply(proj, log):
 
 def search(proj, query, n=12):
     """Free-text footage search for the review screen (uses the normal search cache)."""
-    from .steps.search import SOURCES, SourceDown
+    from .steps.search import SOURCES, SourceDown, source_ready, call_source
+    from .config import load_settings
     keys = load_keys()
+    settings = load_settings()
     out, errors = [], []
-    for src, (kname, fn) in SOURCES.items():
-        if not keys.get(kname):
+    for src in SOURCES:
+        if not source_ready(src, keys, settings):
             continue
         try:
-            for c in fn(query, keys[kname], n):
+            for c in call_source(src, query, keys, n, settings):
                 if c.get("preview_url"):
                     out.append(dict(c, query=query))
         except Exception as e:

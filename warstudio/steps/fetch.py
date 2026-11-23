@@ -31,15 +31,22 @@ def resolve_dvids(pick, key):
     pick["video_url"] = mp4[0]["src"]
     if not num(pick.get("duration")):
         pick["duration"] = num(d.get("duration"))
+    # DVIDS packages open with slates/titles; time_start is where the real footage begins
+    pick["min_start"] = num(d.get("time_start"))
     return pick
 
 
-def choose_start(src_dur, need, used_offsets):
+def choose_start(src_dur, need, used_offsets, min_start=0.0):
     if src_dur <= 0:
-        return 0.0
-    base = max(0.0, min(src_dur - need - 0.2, src_dur * 0.3))
+        return round(max(0.0, min_start), 2)
+    lo = max(0.0, min(min_start, src_dur - need - 0.2))
+    span = src_dur - lo
+    base = max(lo, min(src_dur - need - 0.2, lo + span * 0.3))
     for k in range(6):
-        cand = (base + k * need) % max(src_dur - need, 0.01) if src_dur > need else 0.0
+        if span > need:
+            cand = lo + ((base - lo) + k * need) % max(span - need, 0.01)
+        else:
+            cand = lo
         if all(abs(cand - u) > need for u in used_offsets):
             return round(cand, 2)
     return round(base, 2)
@@ -97,7 +104,7 @@ def run_step(proj, keys, style, log):
             if p.get("forced_start") is not None:
                 start = round(num(p["forced_start"]), 2)
             else:
-                start = choose_start(num(p.get("duration")), need, used.setdefault(k, []))
+                start = choose_start(num(p.get("duration")), need, used.setdefault(k, []), num(p.get("min_start")))
             used.setdefault(k, []).append(start)
         out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_{int(start * 100)}_{int(need * 100)}.mp4"
         if out.exists():
@@ -116,7 +123,7 @@ def run_step(proj, keys, style, log):
                 else:
                     raise
         return {"file": str(out), "start": start, "length": duration(out),
-                **{x: p.get(x, "") for x in ("source", "id", "page_url", "credit", "title")}}
+                **{x: p.get(x, "") for x in ("source", "id", "page_url", "credit", "title", "license")}}
 
     def work(job):
         """The pick first; if it can't be downloaded, the next ranked alternates (up to 3 tries)."""
