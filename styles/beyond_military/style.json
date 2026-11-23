@@ -1,0 +1,70 @@
+{
+  "name": "Beyond Military",
+  "id": "beyond_military",
+  "version": 1,
+  "_source": "Locked from frame-by-frame NexLev analysis of 5 Beyond Military videos (Nov 2026): xNJ4E6uohXs, WewQWuw3aaA, PS0zjfQ97zs, 7LeiKeITIe4, vbtZJ48CO-Y.",
+
+  "canvas": {"width": 1920, "height": 1080, "fps": 30},
+
+  "pacing": {
+    "_note": "Observed ASL 2.2-3.5 s, min ~0.8 s, max ~6-7 s. Cuts land on sentence start or on the named noun mid-sentence.",
+    "intro_seconds": 180,
+    "intro_split_min_seconds": 3.2,
+    "max_shot_seconds": 6.0,
+    "min_shot_seconds": 0.9,
+    "split_long_beats_everywhere": true
+  },
+
+  "footage": {
+    "_note": "~60% real archival, ~20% FLIR/targeting pod, ~10% maps, ~10% control room / cockpit screens. Literal match: exact aircraft/ship/weapon named in narration must be the one on screen.",
+    "classes": ["real", "flir", "cockpit", "control_room", "map"],
+    "source_order": ["dvids", "pexels", "pixabay"],
+    "same_source_cooldown_seconds": 90,
+    "motion": {"drift": true, "drift_scale": 1.06}
+  },
+
+  "grade": {
+    "real": "eq=contrast=1.08:saturation=0.88:gamma=0.98",
+    "flir": "hue=s=0,eq=contrast=1.45:brightness=0.02,noise=alls=10:allf=t",
+    "cockpit": "eq=contrast=1.06:saturation=0.92",
+    "control_room": "eq=contrast=1.10:saturation=0.85",
+    "map": "eq=saturation=1.10"
+  },
+
+  "overlays": {
+    "_note": "Yellow box, black bold text, imperial value on top + metric below. Top-right for times, top-center for measures, top-left for system ID labels. Pop-in ~0.25 s with UI click, hold until next cut (2-4 s).",
+    "box_color": "#FFC400",
+    "text_color": "#0B0B0B",
+    "label_bg": "#0B0B0B",
+    "label_text": "#FFFFFF",
+    "positions": {"time": "top_right", "measure": "top_center", "label": "top_left"},
+    "max_hold_seconds": 4.0,
+    "min_gap_seconds": 2.5,
+    "units": "imperial_plus_metric"
+  },
+
+  "sfx": {
+    "_note": "Every overlay pop-in gets a UI click. Map scenes open with a low whoosh + bass hit. Narrative pivots ('Unknown to...', 'But...') get a riser into a bass hit. Action words get matching one-shots (launch, flyby, explosion, gunfire, flares, radar tone, radio static, alarm). Music drops out for 0.6 s on explosions so the hit dominates.",
+    "gains_db": {
+      "ui_click": -16, "whoosh": -12, "bass_hit": -8, "riser": -14,
+      "launch": -6, "flyby": -8, "explosion": -4, "gunfire": -6, "flares": -10,
+      "radar": -14, "radio_static": -16, "alarm": -12, "impact": -8
+    },
+    "pivot_words": ["unknown to", "but", "suddenly", "then", "that's when", "until"],
+    "keywords": {
+      "launch": ["launch", "fires", "fired", "leaves the rail", "claws off", "screams off", "missile off"],
+      "explosion": ["explodes", "explosion", "bursts", "detonat*", "goes off", "impact", "hits the"],
+      "flyby": ["screams across", "flies over", "roars", "afterburner", "passes over", "races"],
+      "gunfire": ["gunfire", "rounds", "burst of fire", "opens fire", "ak-47", "machine gun"],
+      "flares": ["flares", "chaff"],
+      "radar": ["radar", "lock", "warning receiver", "tone", "painting"],
+      "radio_static": ["radio", "intercom", "calls it", "on the net"],
+      "alarm": ["alarm", "general quarters", "klaxon", "warning"]
+    },
+    "music_duck_db": -18,
+    "music_base_db": -22,
+    "explosion_music_dropout_seconds": 0.6
+  },
+
+  "audio": {"target_lufs": -14, "vo_gain_db": 0}
+}

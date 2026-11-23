@@ -1,0 +1,73 @@
+# WarStudio
+
+Script in, finished military documentary video out. Built for Apple Silicon Macs (tested design target: M1 Pro, 32 GB).
+
+**Input:** title + script + voice + style. **Output:** `final.mp4` (1080p30, -14 LUFS), `contact_sheet.jpg`, `footage_log.csv`, `qc.json`.
+
+## Start
+
+```bash
+git clone https://github.com/haseeb109/war-studio.git
+cd war-studio
+bash setup_mac.sh          # once: ffmpeg, node, uv, Python packages, CLIP model, SFX
+```
+
+Then double-click **`WarStudio.command`** (or `uv run python run.py gui`). The GUI opens at http://127.0.0.1:8765.
+
+1. **Settings** tab: paste your API keys (stored only in `~/.config/warstudio/keys.env`).
+2. **Voices** tab: *Load voices from ai33*, preview, star your favorites (favorites show first everywhere).
+3. **Create** tab: title, script, voice, style → *Start production*.
+4. **Videos** tab: live progress per step, log, final video, contact sheet. *Re-run from step* redoes only what you need.
+5. **Check for update** (top right): pulls the latest version from GitHub and restarts. One click.
+
+Tip: tick **Dry run** for a first test: silent voice and no AI credits, but real footage search, ranking and render.
+
+## API keys
+
+| Key | Used for | Needed? |
+|---|---|---|
+| `AI33_API_KEY` | Voiceover (ai33.pro, ElevenLabs voices) | Yes (not for dry run) |
+| `HIVE_API_KEY` | Brain: beat -> shot spec (DeepSeek on Hive, OpenAI-compatible; change `brain_base_url` / `brain_model` in Settings for another provider) | Recommended (fallback specs otherwise) |
+| `GEMINI_API_KEY` | Rerank: picks the best of the top-5 clips from one collage image | Recommended (CLIP top-1 otherwise) |
+| `DVIDS_API_KEY` | Real US military footage (public domain) — the most important source | At least one footage key |
+| `PEXELS_API_KEY` | Stock footage | |
+| `PIXABAY_API_KEY` | Stock footage | |
+
+One key per service. Searches are cached in `data/search_cache`, so repeated queries cost no requests; a source that hits its rate limit is skipped and the others carry on.
+
+## Pipeline (8 steps, each resumable)
+
+| # | Step | What happens | Output |
+|---|---|---|---|
+| 1 | voice | Script split into sentences; one ai33 voice file per sentence; measured durations give exact sentence timing | `vo/`, `vo.wav`, `vo.json` |
+| 2 | beats | One shot per sentence; first 3 minutes: sentences >= 3.2 s get 2 shots; any shot > 6 s is split | `beats.json` |
+| 3 | specs | Brain writes per beat: 3 search queries (literal first), footage class, exact entity, wrong matches to avoid, ID label, SFX events | `specs.json` |
+| 4 | search | DVIDS -> Pexels -> Pixabay; metadata + preview images only | `candidates.json` |
+| 5 | rank | CLIP (local, MPS) scores previews vs narration -> top 5 -> numbered collage -> Gemini picks the winner. Same source clip not reused within 90 s | `picks.json`, `previews/` |
+| 6 | fetch | Downloads only beat length + 1 s of each winner, normalized to 1080p30, into `library/raw/` (kept for the future library phase) | `fetched.json` |
+| 7 | render | Per beat: slow drift, footage-class grade (FLIR = mono/contrast/noise), overlay baked in, exact frame count from the timeline. Stream-copy join. Voice + SFX + music mix, two-pass loudnorm | `final.mp4` |
+| 8 | qc | Contact sheet, footage log (source URL + offset per shot), A/V drift and loudness check | `qc.json`, `contact_sheet.jpg`, `footage_log.csv` |
+
+CLI: `uv run python run.py new "Title" script.txt --voice elevenlabs_nPczCjzI2devNBz1zQrb [--dummy]` and `uv run python run.py resume projects/<name> --from rank`.
+
+## Styles
+
+Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, overlay look, SFX rules) and `hf/overlay_template.html` (HyperFrames / GSAP animation). Copy `styles/beyond_military` to make a new channel style; it appears in the GUI automatically.
+
+**Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, UI click on every callout, whoosh + bass hit on map scenes, riser into a bass hit on narrative pivots ("Unknown to...", "But..."), one-shot SFX on action words, music ducked under voice and dropped out on explosions.
+
+## Sound effects and music
+
+Built-in synthesized SFX are generated on first run (`assets/sfx/_generated/`). To use real sounds, put `.wav`/`.mp3` files in `assets/sfx/<category>/`; your files always win over the built-in ones. Categories: `ui_click whoosh bass_hit riser launch explosion flyby gunfire flares radar radio_static alarm impact`.
+
+Background music: put a track in `assets/music/` (or set `music_file` in Settings). It loops, ducks under the voice, and drops out on explosions.
+
+## Overlays (HyperFrames)
+
+If `npx hyperframes` works and ffmpeg has `libvpx-vp9`, callouts are rendered as animated transparent WebM from `styles/<id>/hf/overlay_template.html`. Otherwise a static PNG with fade in/out is used, so a render never blocks on HyperFrames.
+
+## Not in this MVP (next phases)
+
+- Shared clip library with index, dedupe, usage ledger, rerank cache (clips are already being saved to `library/raw/`).
+- Animated 3D maps (map beats currently use aerial/satellite stock footage).
+- Licensing: DVIDS footage is public domain; Pexels/Pixabay follow their licenses. `footage_log.csv` records the source of every shot.

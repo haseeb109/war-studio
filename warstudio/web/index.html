@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WarStudio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{--bg:#0d1014;--panel:#151a21;--panel2:#1c232c;--line:#28313c;--text:#e6e9ee;--muted:#8b95a3;--yel:#ffc400;--red:#e5534b;--green:#3fb950;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 24px;border-bottom:1px solid var(--line);background:#0a0c10}
+  .logo{font-weight:800;letter-spacing:.5px;font-size:20px}.logo span{color:var(--yel)}
+  .ver{color:var(--muted);font-size:13px}
+  nav{display:flex;gap:4px;margin-left:24px}
+  nav button{background:none;border:0;color:var(--muted);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:15px}
+  nav button.on{background:var(--panel2);color:var(--text)}
+  .spacer{flex:1}
+  main{max-width:1100px;margin:0 auto;padding:24px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+  h2{margin:0 0 14px;font-size:18px;font-weight:600}
+  label{display:block;color:var(--muted);font-size:13px;margin:12px 0 6px}
+  input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:10px 12px;font:inherit}
+  textarea{min-height:300px;resize:vertical;font-family:ui-monospace,Menlo,monospace;font-size:14px}
+  .row{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}.row>*{flex:1;min-width:180px}
+  .btn{background:var(--yel);color:#111;border:0;border-radius:8px;padding:10px 18px;font-weight:700;cursor:pointer;font-size:14px;white-space:nowrap}
+  .btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:500}
+  .btn:disabled{opacity:.5;cursor:default}
+  .muted{color:var(--muted);font-size:13px}
+  .hidden{display:none}
+  .job{display:flex;align-items:center;gap:14px;padding:12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--panel2)}
+  .bar{height:6px;background:#0a0c10;border-radius:4px;overflow:hidden;flex:0 0 160px}.bar>i{display:block;height:100%;background:var(--yel)}
+  .pill{font-size:12px;padding:2px 8px;border-radius:20px;background:#0a0c10;color:var(--muted)}
+  .pill.done{color:var(--green)}.pill.error{color:var(--red)}.pill.running{color:var(--yel)}
+  .steps{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+  .step{padding:4px 10px;border-radius:6px;background:var(--panel2);font-size:13px;color:var(--muted)}
+  .step.cur{background:var(--yel);color:#111}.step.ok{color:var(--green)}
+  pre{background:#07090c;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:340px;overflow:auto;font-size:12.5px;white-space:pre-wrap}
+  .voices{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+  .voice{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--panel2);display:flex;flex-direction:column;gap:6px}
+  .voice .top{display:flex;align-items:center;gap:8px}.voice b{flex:1}
+  .star{background:none;border:0;font-size:20px;cursor:pointer;color:#555}.star.on{color:var(--yel)}
+  .vid{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);word-break:break-all}
+  .badge{background:var(--red);color:#fff;border-radius:10px;padding:0 7px;font-size:12px;margin-left:6px}
+  video{width:100%;border-radius:10px;background:#000}
+  .tools span{margin-right:14px}
+  .ok{color:var(--green)}.bad{color:var(--red)}
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--panel2);border:1px solid var(--line);padding:12px 16px;border-radius:10px;display:none;max-width:420px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">WAR<span>STUDIO</span></div>
+  <div class="ver" id="ver"></div>
+  <nav>
+    <button data-tab="create" class="on">Create</button>
+    <button data-tab="jobs">Videos</button>
+    <button data-tab="voices">Voices</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div class="spacer"></div>
+  <button class="btn ghost" id="updBtn">Check for update</button>
+</header>
+
+<main>
+  <!-- CREATE -->
+  <section id="tab-create">
+    <div class="card">
+      <h2>New video</h2>
+      <label>Title</label>
+      <input id="title" placeholder="Iran fired at U.S. military... then this happened">
+      <label>Script <span class="muted" id="scriptInfo"></span></label>
+      <textarea id="script" placeholder="Paste the full narration script here. Any length: a 5-minute test or a 30-minute video."></textarea>
+      <div class="row">
+        <div>
+          <label>Voice</label>
+          <select id="voiceSel"></select>
+        </div>
+        <div style="flex:0 0 auto"><button class="btn ghost" id="prevBtn">&#9654; Preview voice</button></div>
+        <div>
+          <label>Style / template</label>
+          <select id="styleSel"></select>
+        </div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="dummy" style="width:auto"> Dry run (silent voice, no AI credits) &mdash; tests footage + render only</label>
+      <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
+        <button class="btn" id="startBtn">Start production</button>
+        <span class="muted" id="startMsg"></span>
+      </div>
+      <audio id="player" class="hidden" controls></audio>
+    </div>
+  </section>
+
+  <!-- JOBS -->
+  <section id="tab-jobs" class="hidden">
+    <div class="card"><h2>Videos</h2><div id="jobList"></div></div>
+    <div class="card hidden" id="jobDetail">
+      <div style="display:flex;align-items:center;gap:12px"><h2 id="jdTitle" style="flex:1;margin:0"></h2>
+        <select id="resumeSel" style="width:auto"></select>
+        <button class="btn ghost" id="resumeBtn">Re-run from step</button>
+        <button class="btn ghost" id="openBtn">Open folder</button></div>
+      <div class="steps" id="jdSteps"></div>
+      <div id="jdFiles"></div>
+      <pre id="jdLog"></pre>
+    </div>
+  </section>
+
+  <!-- VOICES -->
+  <section id="tab-voices" class="hidden">
+    <div class="card">
+      <div class="row">
+        <div><h2 style="margin:0">Voice library</h2><span class="muted" id="vSource"></span></div>
+        <div style="flex:0 0 auto"><button class="btn" id="loadVoices">Load voices from ai33</button></div>
+      </div>
+      <label>Search</label><input id="vSearch" placeholder="name, accent, style...">
+      <div class="voices" id="voiceGrid" style="margin-top:14px"></div>
+    </div>
+    <div class="card">
+      <h2>Add a voice by ID</h2>
+      <div class="row">
+        <div><label>Voice ID (ElevenLabs id, or full ai33 id like clone_xxx)</label><input id="cvId"></div>
+        <div><label>Name</label><input id="cvName"></div>
+        <div style="flex:0 0 auto"><button class="btn ghost" id="cvAdd">Add</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="hidden">
+    <div class="card">
+      <h2>API keys</h2>
+      <p class="muted">Stored only on this Mac in ~/.config/warstudio/keys.env. Leave a field empty to keep the current key.</p>
+      <div id="keyFields"></div>
+      <div style="margin-top:14px"><button class="btn" id="saveKeys">Save keys</button></div>
+    </div>
+    <div class="card">
+      <h2>Settings</h2>
+      <div id="setFields"></div>
+      <div style="margin-top:14px"><button class="btn ghost" id="saveSet">Save settings</button></div>
+    </div>
+    <div class="card"><h2>System check</h2><div class="tools" id="tools"></div></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (url, body) => {
+  const r = await fetch(url, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || r.statusText);
+  return d;
+};
+const toast = (m, ms = 3500) => { const t = $("#toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", ms); };
+let STATUS = {}, VOICES = [], CUR_JOB = null;
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("main section").forEach(s => s.classList.toggle("hidden", s.id !== "tab-" + b.dataset.tab));
+  if (b.dataset.tab === "jobs") loadJobs();
+  if (b.dataset.tab === "voices") renderVoices();
+});
+
+async function loadStatus() {
+  STATUS = await api("/api/status");
+  $("#ver").textContent = "v" + STATUS.version;
+  $("#styleSel").innerHTML = STATUS.styles.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
+  $("#keyFields").innerHTML = STATUS.key_names.map(k => `<label>${k} <span class="muted">${STATUS.keys[k] ? "current: " + STATUS.keys[k] : "not set"}</span></label><input type="password" data-key="${k}" placeholder="paste new key">`).join("");
+  const S = STATUS.settings;
+  $("#setFields").innerHTML = Object.keys(S).map(k => `<label>${k}</label><input data-set="${k}" value="${String(S[k]).replace(/"/g, "&quot;")}">`).join("");
+  const T = STATUS.tools;
+  $("#tools").innerHTML = Object.entries(T).map(([k, v]) => `<span class="${v ? "ok" : "bad"}">${v ? "&#10003;" : "&#10007;"} ${k}</span>`).join("");
+}
+
+async function loadVoices(refresh) {
+  const d = await api("/api/voices" + (refresh ? "?refresh=1" : ""));
+  VOICES = d.voices;
+  $("#vSource").textContent = `${VOICES.length} voices · source: ${d.source}`;
+  const keep = $("#voiceSel").value;
+  $("#voiceSel").innerHTML = VOICES.map(v => `<option value="${v.voice_id}">${v.favorite ? "★ " : ""}${v.name} — ${v.desc || ""}</option>`).join("");
+  if (keep) $("#voiceSel").value = keep;
+  renderVoices();
+}
+
+function renderVoices() {
+  const q = ($("#vSearch").value || "").toLowerCase();
+  $("#voiceGrid").innerHTML = VOICES.filter(v => (v.name + " " + v.desc + " " + v.voice_id).toLowerCase().includes(q)).map(v => `
+    <div class="voice"><div class="top"><b>${v.name}</b>
+      <button class="star ${v.favorite ? "on" : ""}" data-fav="${v.voice_id}" title="favorite">&#9733;</button></div>
+      <div class="muted">${v.desc || ""}</div><div class="vid">${v.voice_id}</div>
+      <div style="display:flex;gap:6px"><button class="btn ghost" data-play="${v.voice_id}" data-url="${v.preview_url || ""}">&#9654; Preview</button>
+      <button class="btn ghost" data-use="${v.voice_id}">Use</button></div></div>`).join("");
+}
+
+$("#voiceGrid").onclick = async e => {
+  const t = e.target;
+  if (t.dataset.fav) {
+    const v = VOICES.find(x => x.voice_id === t.dataset.fav);
+    await api("/api/voices/favorite", {voice_id: v.voice_id, name: v.name, favorite: !v.favorite});
+    await loadVoices(false);
+  } else if (t.dataset.play) {
+    playVoice(t.dataset.play, t.dataset.url);
+  } else if (t.dataset.use) {
+    $("#voiceSel").value = t.dataset.use; document.querySelector('nav button[data-tab="create"]').click(); toast("Voice selected");
+  }
+};
+async function playVoice(id, url) {
+  try {
+    if (!url) { toast("Generating a short sample on ai33…"); url = (await api("/api/voices/preview", {voice_id: id})).url; }
+    const p = $("#player"); p.src = url; p.classList.remove("hidden"); p.play();
+  } catch (e) { toast("Preview failed: " + e.message, 6000); }
+}
+$("#prevBtn").onclick = () => { const v = VOICES.find(x => x.voice_id === $("#voiceSel").value); if (v) playVoice(v.voice_id, v.preview_url); };
+$("#loadVoices").onclick = async () => { $("#loadVoices").disabled = true; try { await loadVoices(true); toast("Voice library loaded"); } finally { $("#loadVoices").disabled = false; } };
+$("#vSearch").oninput = renderVoices;
+$("#cvAdd").onclick = async () => {
+  if (!$("#cvId").value.trim()) return toast("Enter a voice ID");
+  await api("/api/voices/custom", {voice_id: $("#cvId").value, name: $("#cvName").value});
+  $("#cvId").value = $("#cvName").value = ""; await loadVoices(false); toast("Voice added");
+};
+
+$("#script").oninput = () => {
+  const s = $("#script").value, w = s.trim() ? s.trim().split(/\s+/).length : 0;
+  $("#scriptInfo").textContent = w ? `· ${w} words · ~${(w / 150).toFixed(1)} min · ${s.length} chars (~${Math.round(s.length * 1.1)} ai33 credits)` : "";
+};
+$("#startBtn").onclick = async () => {
+  try {
+    $("#startBtn").disabled = true;
+    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked});
+    $("#startMsg").textContent = "Queued: " + d.id;
+    document.querySelector('nav button[data-tab="jobs"]').click(); openJob(d.id);
+  } catch (e) { toast(e.message, 6000); } finally { $("#startBtn").disabled = false; }
+};
+
+async function loadJobs() {
+  const js = await api("/api/jobs");
+  $("#jobList").innerHTML = js.length ? js.map(j => `<div class="job" data-id="${j.id}"><b style="flex:1">${j.title || j.id}</b>
+    <span class="pill ${j.state}">${j.state || ""}${j.step ? " · " + j.step : ""}</span>
+    <div class="bar"><i style="width:${j.state === "done" ? 100 : Math.round((j.progress || 0) * 100)}%"></i></div></div>`).join("") : '<p class="muted">No videos yet.</p>';
+  document.querySelectorAll(".job").forEach(el => el.onclick = () => openJob(el.dataset.id));
+}
+async function openJob(id) {
+  CUR_JOB = id;
+  $("#jobDetail").classList.remove("hidden");
+  $("#resumeSel").innerHTML = STATUS.steps.map(s => `<option>${s}</option>`).join("");
+  await refreshJob();
+}
+async function refreshJob() {
+  if (!CUR_JOB) return;
+  const d = await api("/api/jobs/" + CUR_JOB);
+  const st = d.status || {};
+  $("#jdTitle").textContent = (d.meta && d.meta.title) || d.id;
+  const idx = STATUS.steps.indexOf(st.step);
+  $("#jdSteps").innerHTML = STATUS.steps.map((s, i) => `<span class="step ${st.state === "done" || (idx >= 0 && i < idx) ? "ok" : ""} ${s === st.step ? "cur" : ""}">${s}${s === st.step ? " " + Math.round((st.progress || 0) * 100) + "%" : ""}</span>`).join("");
+  const f = d.files || [];
+  let h = "";
+  if (f.includes("final.mp4")) h += `<video controls src="/files/${d.id}/final.mp4?t=${Date.now()}"></video>`;
+  h += '<p>' + f.map(x => `<a style="color:var(--yel);margin-right:16px" target="_blank" href="/files/${d.id}/${x}">${x}</a>`).join("") + "</p>";
+  if (d.qc) h += `<p class="muted">QC: ${d.qc.video_seconds || "?"}s · ${d.qc.beats} beats · ${d.qc.beats_without_footage.length} without footage · ${d.qc.integrated_lufs || "?"} LUFS</p>`;
+  if ($("#jdFiles").dataset.sig !== f.join()) { $("#jdFiles").innerHTML = h; $("#jdFiles").dataset.sig = f.join(); }
+  const log = $("#jdLog"), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = (st.log || []).join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+$("#resumeBtn").onclick = async () => { await api(`/api/jobs/${CUR_JOB}/resume`, {from_step: $("#resumeSel").value}); toast("Re-running from " + $("#resumeSel").value); };
+$("#openBtn").onclick = () => api(`/api/open/${CUR_JOB}`, {});
+setInterval(() => { if (!$("#tab-jobs").classList.contains("hidden")) { loadJobs(); refreshJob(); } }, 2500);
+
+$("#saveKeys").onclick = async () => {
+  const keys = {}; document.querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
+  await api("/api/keys", {keys}); toast("Keys saved"); await loadStatus();
+};
+$("#saveSet").onclick = async () => {
+  const s = {}; document.querySelectorAll("[data-set]").forEach(i => { const v = i.value; s[i.dataset.set] = /^\d+$/.test(v) ? Number(v) : v; });
+  await api("/api/settings", {settings: s}); toast("Settings saved");
+};
+
+$("#updBtn").onclick = async () => {
+  const b = $("#updBtn");
+  if (b.dataset.ready) {
+    if (!confirm("Install update and restart WarStudio?")) return;
+    b.disabled = true; b.textContent = "Updating…";
+    try { await api("/api/update/apply", {}); toast("Updated. Restarting…", 8000); setTimeout(() => location.reload(), 6000); }
+    catch (e) { toast(e.message, 8000); b.disabled = false; b.textContent = "Install update"; }
+    return;
+  }
+  b.disabled = true; b.textContent = "Checking…";
+  try {
+    const d = await api("/api/update/check");
+    if (!d.ok) { toast("Update check failed: " + d.message, 7000); b.textContent = "Check for update"; }
+    else if (d.behind > 0) { b.dataset.ready = 1; b.innerHTML = `Install update <span class="badge">${d.behind}</span>`; toast(d.changes.join("\n") || "Update available", 7000); }
+    else { toast("WarStudio is up to date"); b.textContent = "Up to date"; setTimeout(() => b.textContent = "Check for update", 3000); }
+  } finally { b.disabled = false; }
+};
+
+(async () => { await loadStatus(); await loadVoices(false); })();
+</script>
+</body>
+</html>

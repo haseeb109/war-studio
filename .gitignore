@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# per-machine data (keys live in ~/.config/warstudio, never here)
+.env
+projects/*
+!projects/.gitkeep
+library/raw/*
+!library/raw/.gitkeep
+data/*
+!data/.gitkeep
+assets/sfx/_generated/
+assets/music/*
+!assets/music/.gitkeep
