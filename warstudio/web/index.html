@@ -44,6 +44,35 @@
   video{width:100%;border-radius:10px;background:#000}
   .tools span{margin-right:14px}
   .ok{color:var(--green)}.bad{color:var(--red)}
+  .lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .vc{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer}
+  .vc .pv{aspect-ratio:16/9;background:#07090c;display:flex;align-items:center;justify-content:center;color:var(--muted);position:relative}
+  .vc .pv img{width:100%;height:100%;object-fit:cover}
+  .vc .dur{position:absolute;right:6px;bottom:6px;background:#000c;padding:1px 6px;border-radius:4px;font-size:12px;color:#fff}
+  .vc .bd{padding:10px 12px}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;background:#0a0c10;color:var(--muted);margin:4px 4px 0 0}
+  .tag.ok{color:var(--green)}.tag.warn{color:var(--yel)}.tag.bad{color:var(--red)}
+  .rv-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:14px}
+  .rv-panel{max-height:640px;overflow:auto;padding:16px}
+  .rv-panel h3{font-size:13px;color:var(--muted);font-weight:600;margin:16px 0 8px;text-transform:uppercase;letter-spacing:.5px}
+  .strip{display:flex;gap:3px;overflow-x:auto;padding-bottom:6px}
+  .blk{flex:0 0 auto;height:92px;border-radius:6px;background:var(--panel2);border:2px solid transparent;cursor:pointer;position:relative;overflow:hidden;font-size:11px;color:#ddd}
+  .blk img{width:100%;height:56px;object-fit:cover;display:block;opacity:.9}
+  .blk .tx{padding:2px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .blk.flag{background:#5a4a14}.blk.miss{background:#5c1f1f}
+  .blk.sel{border-color:var(--yel)}.blk.now{box-shadow:inset 0 -3px 0 var(--green)}
+  .blk .mk{position:absolute;top:4px;right:4px;width:9px;height:9px;border-radius:2px;background:var(--yel)}
+  .blk .dt{position:absolute;top:4px;left:4px;width:9px;height:9px;border-radius:50%;background:#3b82f6}
+  .lg{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle}
+  .alts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .alt{border:2px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;font-size:11px;background:#07090c}
+  .alt img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
+  .alt div{padding:3px 6px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alt.on{border-color:var(--yel)}
+  .ev{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:5px;font-size:13px}
+  .ev button{margin-left:auto;background:none;border:0;color:var(--red);cursor:pointer;font-size:16px}
+  .rv-bar{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;background:#0a0c10;border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-top:4px}
+  .flagtxt{color:var(--yel);font-size:13px}
   #toast{position:fixed;bottom:20px;right:20px;background:var(--panel2);border:1px solid var(--line);padding:12px 16px;border-radius:10px;display:none;max-width:420px}
 </style>
 </head>
@@ -91,18 +120,73 @@
     </div>
   </section>
 
-  <!-- JOBS -->
+  <!-- VIDEO LIBRARY -->
   <section id="tab-jobs" class="hidden">
-    <div class="card"><h2>Videos</h2><div id="jobList"></div></div>
-    <div class="card hidden" id="jobDetail">
-      <div style="display:flex;align-items:center;gap:12px"><h2 id="jdTitle" style="flex:1;margin:0"></h2>
-        <select id="resumeSel" style="width:auto"></select>
-        <button class="btn ghost" id="resumeBtn">Re-run from step</button>
-        <button class="btn ghost" id="openBtn">Open folder</button>
-        <button class="btn ghost" id="copyLog">Copy log</button></div>
-      <div class="steps" id="jdSteps"></div>
-      <div id="jdFiles"></div>
-      <pre id="jdLog"></pre>
+    <div id="libView">
+      <div class="card"><div style="display:flex;align-items:center;gap:12px"><h2 style="flex:1;margin:0">Video library</h2>
+        <input id="libSearch" placeholder="Search titles" style="width:260px"></div>
+        <div class="lib" id="jobList" style="margin-top:16px"></div></div>
+    </div>
+    <div id="jobDetail" class="hidden">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="btn ghost" id="backLib">&larr; Library</button>
+          <h2 id="jdTitle" style="flex:1;margin:0"></h2>
+          <span id="jdBadges"></span>
+        </div>
+        <div id="jdPlayer" style="margin-top:14px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px" id="jdActions">
+          <button class="btn" id="reviewBtn">Review timeline</button>
+          <a class="btn ghost" id="dlBtn" style="text-decoration:none">Download video</a>
+          <a class="btn ghost" id="csBtn" target="_blank" style="text-decoration:none">Contact sheet</a>
+          <a class="btn ghost" id="flBtn" target="_blank" style="text-decoration:none">Footage log</a>
+          <button class="btn ghost" id="markBtn">Mark as reviewed</button>
+          <button class="btn ghost" id="openBtn">Open folder</button>
+          <button class="btn ghost" id="copyLog">Copy log</button>
+        </div>
+        <div class="steps" id="jdSteps"></div>
+        <div id="jdQc" class="muted"></div>
+        <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Log and re-run</summary>
+          <div style="display:flex;gap:8px;margin:10px 0"><select id="resumeSel" style="width:auto"></select>
+            <button class="btn ghost" id="resumeBtn">Re-run from step</button>
+            <span class="muted" style="align-self:center">Re-running a step discards timeline edits made after it.</span></div>
+          <pre id="jdLog"></pre></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- REVIEW EDITOR -->
+  <section id="tab-review" class="hidden">
+    <div class="card" style="padding:14px 18px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="btn ghost" id="rvBack">&larr; Video</button>
+        <h2 id="rvTitle" style="flex:1;margin:0"></h2>
+        <span class="muted" id="rvFlagInfo"></span>
+        <button class="btn ghost" id="rvPrevFlag">&lsaquo; Flagged</button>
+        <button class="btn ghost" id="rvNextFlag">Flagged &rsaquo;</button>
+        <label class="muted" style="display:flex;gap:6px;align-items:center;margin:0">Zoom <input type="range" id="rvZoom" min="8" max="60" value="22" style="width:110px"></label>
+      </div>
+    </div>
+    <div class="rv-grid">
+      <div class="card" style="padding:12px">
+        <video id="rvVideo" controls style="width:100%"></video>
+        <div class="muted" id="rvNote" style="margin-top:6px">Playing the last rendered version. Changes show after "Apply changes".</div>
+      </div>
+      <div class="card rv-panel" id="rvPanel"><p class="muted">Click a beat in the timeline.</p></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="strip" id="rvStrip"></div>
+      <div class="muted" style="margin-top:8px;font-size:12px">
+        <span class="lg" style="background:#5a4a14"></span> low match / generic search &nbsp;
+        <span class="lg" style="background:#5c1f1f"></span> no footage &nbsp;
+        <span class="lg" style="background:var(--yel)"></span> callout &nbsp;
+        <span class="lg" style="background:#3b82f6"></span> changed, not applied
+      </div>
+    </div>
+    <div class="rv-bar">
+      <span id="rvPending" style="flex:1">No changes</span>
+      <button class="btn ghost" id="rvUndo">Undo</button>
+      <button class="btn" id="rvApply">Apply changes</button>
     </div>
   </section>
 
@@ -178,7 +262,7 @@ let STATUS = {}, VOICES = [], CUR_JOB = null;
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("hidden", s.id !== "tab-" + b.dataset.tab));
-  if (b.dataset.tab === "jobs") loadJobs();
+  if (b.dataset.tab === "jobs") { CUR_JOB = null; $("#jobDetail").classList.add("hidden"); $("#libView").classList.remove("hidden"); loadJobs(); }
   if (b.dataset.tab === "voices") renderVoices();
   if (b.dataset.tab === "check") pollDiag();
 });
@@ -201,6 +285,7 @@ async function loadVoices(refresh) {
   const keep = $("#voiceSel").value;
   $("#voiceSel").innerHTML = VOICES.map(v => `<option value="${v.voice_id}">${v.favorite ? "★ " : ""}${v.name} — ${v.desc || ""}</option>`).join("");
   if (keep) $("#voiceSel").value = keep;
+  else if (!VOICES.some(v => v.favorite) && VOICES.some(v => v.name === "Brian")) $("#voiceSel").value = VOICES.find(v => v.name === "Brian").voice_id;
   renderVoices();
 }
 
@@ -250,48 +335,264 @@ $("#startBtn").onclick = async () => {
     $("#startBtn").disabled = true;
     const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked});
     $("#startMsg").textContent = "Queued: " + d.id;
-    document.querySelector('nav button[data-tab="jobs"]').click(); openJob(d.id);
+    document.querySelector('nav button[data-tab="jobs"]').click(); await loadJobs(); openJob(d.id);
   } catch (e) { toast(e.message, 6000); } finally { $("#startBtn").disabled = false; }
 };
 
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const fmtT = x => { x = Math.max(0, x || 0); const m = Math.floor(x / 60), s = x - m * 60; return `${m}:${s.toFixed(1).padStart(4, "0")}`; };
+const fmtDur = x => x ? `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, "0")}` : "";
+function showSection(id) { document.querySelectorAll("main section").forEach(s => s.classList.toggle("hidden", s.id !== id)); }
+
+// ---------- library ----------
+let JOBS = [];
 async function loadJobs() {
-  const js = await api("/api/jobs");
-  $("#jobList").innerHTML = js.length ? js.map(j => `<div class="job" data-id="${j.id}"><b style="flex:1">${j.title || j.id}</b>
-    <span class="pill ${j.state}">${j.state || ""}${j.step ? " · " + j.step : ""}</span>
-    <div class="bar"><i style="width:${j.state === "done" ? 100 : Math.round((j.progress || 0) * 100)}%"></i></div></div>`).join("") : '<p class="muted">No videos yet.</p>';
-  document.querySelectorAll(".job").forEach(el => el.onclick = () => openJob(el.dataset.id));
+  JOBS = await api("/api/jobs");
+  renderLib();
 }
+function renderLib() {
+  const q = ($("#libSearch").value || "").toLowerCase();
+  const list = JOBS.filter(j => (j.title || j.id).toLowerCase().includes(q));
+  $("#jobList").innerHTML = list.length ? list.map(j => {
+    const running = j.state === "running" || j.state === "queued";
+    const pv = j.has_final && !running ? `<img loading="lazy" src="/api/jobs/${j.id}/poster?v=${j.seconds || 0}">` :
+      `<div style="text-align:center;padding:10px"><div class="muted">${running ? (j.step || j.state) : (j.state || "")}</div>
+       ${running ? `<div class="bar" style="width:160px;margin-top:8px"><i style="width:${Math.round((j.progress || 0) * 100)}%"></i></div>` : ""}</div>`;
+    const tags = [];
+    if (j.state === "error") tags.push('<span class="tag bad">failed</span>');
+    if (running) tags.push('<span class="tag warn">processing</span>');
+    if (j.has_final) tags.push(j.review === "reviewed" ? '<span class="tag ok">reviewed</span>' : j.review === "edited" ? '<span class="tag warn">edited</span>' : '<span class="tag">not reviewed</span>');
+    if (j.no_footage) tags.push(`<span class="tag bad">${j.no_footage} no footage</span>`);
+    if (j.dummy) tags.push('<span class="tag">dry run</span>');
+    const date = j.created ? new Date(j.created * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"}) : "";
+    return `<div class="vc" data-id="${j.id}"><div class="pv">${pv}${j.seconds ? `<span class="dur">${fmtDur(j.seconds)}</span>` : ""}</div>
+      <div class="bd"><b>${esc(j.title || j.id)}</b><div class="muted" style="font-size:12px">${date}</div>${tags.join("")}</div></div>`;
+  }).join("") : '<p class="muted">No videos yet. Create one in the Create tab.</p>';
+  document.querySelectorAll(".vc").forEach(el => el.onclick = () => openJob(el.dataset.id));
+}
+$("#libSearch").oninput = renderLib;
+
 async function openJob(id) {
   CUR_JOB = id;
+  history.replaceState(null, "", "#video/" + id);
+  showSection("tab-jobs");
+  $("#libView").classList.add("hidden");
   $("#jobDetail").classList.remove("hidden");
+  $("#jdPlayer").dataset.sig = "";
   $("#resumeSel").innerHTML = STATUS.steps.map(s => `<option>${s}</option>`).join("");
   await refreshJob();
 }
+$("#backLib").onclick = () => { CUR_JOB = null; history.replaceState(null, "", "#"); $("#jobDetail").classList.add("hidden"); $("#libView").classList.remove("hidden"); loadJobs(); };
+
 async function refreshJob() {
   if (!CUR_JOB) return;
   const d = await api("/api/jobs/" + CUR_JOB);
-  const st = d.status || {};
+  const st = d.status || {}, f = d.files || [];
+  const rv = (JOBS.find(j => j.id === CUR_JOB) || {}).review;
   $("#jdTitle").textContent = (d.meta && d.meta.title) || d.id;
+  const busy = st.state === "running" || st.state === "queued";
+  $("#jdBadges").innerHTML = `<span class="pill ${st.state}">${st.state || ""}${st.step ? " · " + st.step : ""}</span>`;
   const idx = STATUS.steps.indexOf(st.step);
   $("#jdSteps").innerHTML = STATUS.steps.map((s, i) => `<span class="step ${st.state === "done" || (idx >= 0 && i < idx) ? "ok" : ""} ${s === st.step ? "cur" : ""}">${s}${s === st.step ? " " + Math.round((st.progress || 0) * 100) + "%" : ""}</span>`).join("");
-  const f = d.files || [];
-  let h = "";
-  if (f.includes("final.mp4")) h += `<video controls src="/files/${d.id}/final.mp4?t=${Date.now()}"></video>`;
-  h += '<p>' + f.map(x => `<a style="color:var(--yel);margin-right:16px" target="_blank" href="/files/${d.id}/${x}">${x}</a>`).join("") + "</p>";
-  if (d.qc) h += `<p class="muted">QC: ${d.qc.video_seconds || "?"}s · ${d.qc.beats} beats · ${d.qc.beats_without_footage.length} without footage · ${d.qc.integrated_lufs || "?"} LUFS</p>`;
-  if ($("#jdFiles").dataset.sig !== f.join()) { $("#jdFiles").innerHTML = h; $("#jdFiles").dataset.sig = f.join(); }
+  const sig = f.join() + "|" + (d.qc ? d.qc.video_seconds : "") + "|" + busy;
+  if ($("#jdPlayer").dataset.sig !== sig) {
+    $("#jdPlayer").dataset.sig = sig;
+    $("#jdPlayer").innerHTML = f.includes("final.mp4") && !busy ? `<video controls preload="metadata" poster="/api/jobs/${d.id}/poster?v=${Date.now()}" src="/files/${d.id}/final.mp4?v=${Date.now()}"></video>` :
+      `<div style="aspect-ratio:16/9;background:#07090c;border-radius:10px;display:flex;align-items:center;justify-content:center" class="muted">${busy ? "Working… " + (st.step || "") : "No video yet"}</div>`;
+  }
+  const has = f.includes("final.mp4");
+  $("#reviewBtn").disabled = !has || busy;
+  $("#dlBtn").href = `/files/${d.id}/final.mp4`; $("#dlBtn").setAttribute("download", (d.meta.title || "video") + ".mp4");
+  $("#csBtn").href = `/files/${d.id}/contact_sheet.jpg`; $("#flBtn").href = `/files/${d.id}/footage_log.csv`;
+  ["dlBtn", "csBtn", "flBtn"].forEach(x => $("#" + x).style.display = has ? "" : "none");
+  $("#markBtn").textContent = rv === "reviewed" ? "Reviewed ✓" : "Mark as reviewed";
+  $("#markBtn").dataset.on = rv === "reviewed" ? "1" : "";
+  $("#jdQc").textContent = d.qc ? `${d.qc.video_seconds || "?"}s · ${d.qc.beats} beats · ${d.qc.beats_without_footage.length} without footage · ${d.qc.integrated_lufs ?? "?"} LUFS · A/V drift ${d.qc.av_drift_seconds ?? "?"}s` : "";
   const log = $("#jdLog"), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = (st.log || []).join("\n");
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
-$("#resumeBtn").onclick = async () => { await api(`/api/jobs/${CUR_JOB}/resume`, {from_step: $("#resumeSel").value}); toast("Re-running from " + $("#resumeSel").value); };
+$("#resumeBtn").onclick = async () => {
+  if (!confirm("Re-run from '" + $("#resumeSel").value + "'? Timeline edits made after this step are discarded.")) return;
+  await api(`/api/jobs/${CUR_JOB}/resume`, {from_step: $("#resumeSel").value}); toast("Re-running from " + $("#resumeSel").value);
+};
 $("#openBtn").onclick = () => api(`/api/open/${CUR_JOB}`, {});
+$("#markBtn").onclick = async () => { await api(`/api/review/${CUR_JOB}/reviewed`, {reviewed: !$("#markBtn").dataset.on}); await loadJobs(); refreshJob(); };
 $("#copyLog").onclick = async () => {
   const d = await api("/api/jobs/" + CUR_JOB);
   const t = `WarStudio v${STATUS.version} | video ${d.id} | state ${d.status.state} | step ${d.status.step || "-"}\nerror: ${d.status.error || "-"}\n\n` + (d.status.log || []).join("\n");
   try { await navigator.clipboard.writeText(t); toast("Log copied — paste it to Claude"); } catch { toast("Copy failed; select the log text manually"); }
 };
-setInterval(() => { if (!$("#tab-jobs").classList.contains("hidden")) { loadJobs(); refreshJob(); } }, 2500);
+$("#reviewBtn").onclick = () => openReview(CUR_JOB);
+setInterval(() => {
+  if ($("#tab-jobs").classList.contains("hidden")) return;
+  if (CUR_JOB) refreshJob(); else loadJobs();
+}, 2500);
+
+// ---------- review editor ----------
+let RV = null, RV_SEL = null, RV_APPLYING = false;
+async function openReview(id) {
+  CUR_JOB = id;
+  history.replaceState(null, "", "#review/" + id);
+  showSection("tab-review");
+  RV_SEL = null;
+  $("#rvTitle").textContent = (JOBS.find(j => j.id === id) || {}).title || id;
+  await loadReview(true);
+}
+async function loadReview(reloadVideo) {
+  RV = await api(`/api/review/${CUR_JOB}`);
+  if (reloadVideo) { const v = $("#rvVideo"), t = v.currentTime || 0; v.poster = `/api/jobs/${CUR_JOB}/poster?v=${RV.final_mtime}`; v.src = `/files/${CUR_JOB}/final.mp4?v=${RV.final_mtime}`; v.currentTime = t; }
+  $("#rvFlagInfo").textContent = `${RV.beats.length} beats · ${RV.flagged} flagged`;
+  drawStrip();
+  if (RV_SEL === null) { const f = RV.beats.find(b => b.flags.length); RV_SEL = f ? f.id : 0; }
+  drawPanel();
+  drawPending();
+}
+function drawStrip() {
+  const z = +$("#rvZoom").value;
+  $("#rvStrip").innerHTML = RV.beats.map(b => {
+    const cls = b.flags.includes("no footage") ? "miss" : b.flags.length ? "flag" : "";
+    return `<div class="blk ${cls} ${b.id === RV_SEL ? "sel" : ""}" data-id="${b.id}" style="width:${Math.max(46, Math.round((b.end - b.start) * z))}px" title="${esc(b.text)}">
+      <img loading="lazy" src="/api/review/${CUR_JOB}/thumb/${b.id}?v=${RV.final_mtime}">
+      ${b.overlay ? '<span class="mk"></span>' : ""}${b.dirty ? '<span class="dt"></span>' : ""}
+      <div class="tx">${fmtT(b.start)}</div><div class="tx">${esc(b.text)}</div></div>`;
+  }).join("");
+  document.querySelectorAll(".blk").forEach(el => el.onclick = () => selectBeat(+el.dataset.id, true));
+}
+function selectBeat(id, seek) {
+  RV_SEL = id;
+  document.querySelectorAll(".blk").forEach(el => el.classList.toggle("sel", +el.dataset.id === id));
+  const b = RV.beats.find(x => x.id === id);
+  if (seek && b) $("#rvVideo").currentTime = b.start + 0.01;
+  const el = document.querySelector(`.blk[data-id="${id}"]`);
+  if (el) el.scrollIntoView({block: "nearest", inline: "center", behavior: "smooth"});
+  drawPanel();
+}
+$("#rvZoom").oninput = drawStrip;
+$("#rvVideo").ontimeupdate = () => {
+  if (!RV) return;
+  const t = $("#rvVideo").currentTime, b = RV.beats.find(x => t >= x.start && t < x.end);
+  document.querySelectorAll(".blk").forEach(el => el.classList.toggle("now", b && +el.dataset.id === b.id));
+};
+function jumpFlag(dir) {
+  const fl = RV.beats.filter(b => b.flags.length).map(b => b.id);
+  if (!fl.length) return toast("No flagged beats");
+  const next = dir > 0 ? fl.find(i => i > RV_SEL) ?? fl[0] : [...fl].reverse().find(i => i < RV_SEL) ?? fl[fl.length - 1];
+  selectBeat(next, true);
+}
+$("#rvNextFlag").onclick = () => jumpFlag(1);
+$("#rvPrevFlag").onclick = () => jumpFlag(-1);
+$("#rvBack").onclick = () => openJob(CUR_JOB);
+
+function drawPanel() {
+  const b = RV.beats.find(x => x.id === RV_SEL);
+  if (!b) return;
+  const sent = RV.sentences.find(s => s.sid === b.sid);
+  const evs = RV.sfx.filter(e => e.t >= b.start - 0.4 && e.t < b.end);
+  const ov = b.overlay || {kind: "measure", line1: "", line2: ""};
+  const clipDur = b.clip && b.clip.source_duration ? b.clip.source_duration : 0;
+  const beatLen = b.end - b.start;
+  $("#rvPanel").innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px"><b>Beat ${b.id}</b><span class="muted">${fmtT(b.start)} – ${fmtT(b.end)} · ${beatLen.toFixed(1)}s</span></div>
+    ${b.flags.length ? `<div class="flagtxt">⚑ ${b.flags.join(", ")}</div>` : ""}
+    <div style="margin-top:6px">"${esc(b.text)}"</div>
+
+    <h3>Narration (whole sentence)</h3>
+    <textarea id="pNar" style="min-height:70px;font-family:inherit">${esc(sent ? sent.text : "")}</textarea>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><button class="btn ghost" id="pNarBtn">Re-voice sentence</button><span class="muted" id="pNarInfo"></span></div>
+
+    <h3>Clip</h3>
+    ${b.pick ? `<div class="muted" style="font-size:13px">Now: ${esc(b.pick.source)} · ${esc((b.pick.title || b.pick.id || "").slice(0, 60))}${b.pick.gemini_score != null ? " · score " + b.pick.gemini_score : ""}</div>` : '<div class="flagtxt">No clip for this beat</div>'}
+    <div class="alts" style="margin-top:8px">${b.alternates.map((a, i) => `<div class="alt ${a.chosen ? "on" : ""}" data-alt="${i}">
+      ${a.preview ? `<img src="/files/${CUR_JOB}/previews/${encodeURIComponent(a.preview)}">` : '<div style="aspect-ratio:16/9"></div>'}
+      <div>${esc(a.source)}${a.gemini_score != null ? " · " + a.gemini_score + "/10" : ""}</div></div>`).join("") || '<span class="muted">No ranked alternates saved.</span>'}</div>
+    <div style="display:flex;gap:6px;margin-top:8px"><input id="pQ" placeholder="Search footage, e.g. ${esc((b.queries[0] || "F-15E takeoff"))}"><button class="btn ghost" id="pQBtn">Search</button></div>
+    <div class="alts" id="pRes" style="margin-top:8px"></div>
+    <label class="btn ghost" style="display:inline-block;margin-top:8px;cursor:pointer">Use my own clip…<input type="file" id="pUp" accept="video/*" style="display:none"></label>
+    ${b.clip && clipDur > beatLen + 1 && b.pick && b.pick.source !== "user" ? `
+      <div style="margin-top:10px"><span class="muted">Clip part: start at <b id="pOffV">${(b.clip.start || 0).toFixed(1)}</b>s of ${clipDur.toFixed(0)}s</span>
+      <input type="range" id="pOff" min="0" max="${Math.max(0, clipDur - beatLen - 1).toFixed(1)}" step="0.5" value="${b.clip.start || 0}">
+      <button class="btn ghost" id="pOffBtn">Use this part</button></div>` : ""}
+
+    <h3>Look</h3>
+    <select id="pGrade">${RV.grades.map(g => `<option ${g === b.footage_class ? "selected" : ""}>${g}</option>`).join("")}</select>
+
+    <h3>Callout</h3>
+    <div class="row" style="gap:8px">
+      <div style="min-width:110px;flex:0 0 110px"><select id="pOvK">${["measure", "time", "label"].map(k => `<option ${k === ov.kind ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div><input id="pOv1" placeholder="28,000 ft" value="${esc(ov.line1)}"></div>
+      <div><input id="pOv2" placeholder="8,534 m (optional)" value="${esc(ov.line2 || "")}"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:6px"><button class="btn ghost" id="pOvSave">${b.overlay ? "Update callout" : "Add callout"}</button>${b.overlay ? '<button class="btn ghost" id="pOvDel">Remove</button>' : ""}</div>
+
+    <h3>Sound effects</h3>
+    ${evs.map(e => `<div class="ev"><span>${esc(e.cat)}</span><span class="muted">${fmtT(e.t)}</span><button data-ev="${e.index}" title="remove">×</button></div>`).join("") || '<div class="muted" style="font-size:13px">None on this beat.</div>'}
+    <div style="display:flex;gap:6px;margin-top:6px"><select id="pSfx">${RV.sfx_categories.map(c => `<option>${c}</option>`).join("")}</select><button class="btn ghost" id="pSfxAdd">Add</button></div>`;
+
+  const doEdit = async (action, data, opts = {}) => {
+    try { const r = await api(`/api/review/${CUR_JOB}/edit`, {action, bid: b.id, sid: b.sid, data}); if (opts.msg) toast(opts.msg(r)); await loadReview(false); }
+    catch (e) { toast(e.message, 6000); }
+  };
+  $("#pNar").oninput = () => { const n = $("#pNar").value.length; $("#pNarInfo").textContent = `~${Math.round(n * 1.1)} ai33 credits`; };
+  $("#pNarBtn").onclick = async () => {
+    $("#pNarBtn").disabled = true; $("#pNarInfo").textContent = "Generating voice…";
+    await doEdit("narration", {text: $("#pNar").value}, {msg: r => `Sentence re-voiced (timeline moved ${r.result.shift_seconds}s)`});
+  };
+  document.querySelectorAll("[data-alt]").forEach(el => el.onclick = () => doEdit("clip", {candidate: b.alternates[+el.dataset.alt]}, {msg: () => "Clip swapped"}));
+  // swap needs the full candidate; server fills it from saved alternates by source+id
+  $("#pQBtn").onclick = async () => {
+    $("#pRes").innerHTML = '<span class="muted">Searching…</span>';
+    try {
+      const r = await api(`/api/review/${CUR_JOB}/search`, {query: $("#pQ").value});
+      window._res = r.results;
+      $("#pRes").innerHTML = r.results.slice(0, 18).map((c, i) => `<div class="alt" data-res="${i}"><img src="${esc(c.preview_url)}"><div>${esc(c.source)} · ${esc((c.title || "").slice(0, 30))}</div></div>`).join("") || '<span class="muted">No results.</span>';
+      document.querySelectorAll("[data-res]").forEach(el => el.onclick = () => doEdit("clip", {candidate: window._res[+el.dataset.res]}, {msg: () => "Clip swapped"}));
+    } catch (e) { $("#pRes").innerHTML = ""; toast(e.message, 6000); }
+  };
+  $("#pQ").onkeydown = e => { if (e.key === "Enter") $("#pQBtn").click(); };
+  $("#pUp").onchange = async () => {
+    const f = $("#pUp").files[0]; if (!f) return;
+    toast("Uploading and converting your clip…", 8000);
+    try {
+      const r = await fetch(`/api/review/${CUR_JOB}/upload?bid=${b.id}&name=${encodeURIComponent(f.name)}`, {method: "POST", body: f});
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+      toast("Your clip is set for this beat"); await loadReview(false);
+    } catch (e) { toast(e.message, 6000); }
+  };
+  if ($("#pOff")) {
+    $("#pOff").oninput = () => $("#pOffV").textContent = (+$("#pOff").value).toFixed(1);
+    $("#pOffBtn").onclick = () => doEdit("offset", {start: +$("#pOff").value}, {msg: () => "Clip part changed"});
+  }
+  $("#pGrade").onchange = () => doEdit("grade", {footage_class: $("#pGrade").value}, {msg: () => "Look changed"});
+  $("#pOvSave").onclick = () => doEdit("overlay", {kind: $("#pOvK").value, line1: $("#pOv1").value, line2: $("#pOv2").value}, {msg: () => "Callout saved"});
+  if ($("#pOvDel")) $("#pOvDel").onclick = () => doEdit("overlay_remove", {}, {msg: () => "Callout removed"});
+  document.querySelectorAll("[data-ev]").forEach(el => el.onclick = () => doEdit("sfx_remove", {index: +el.dataset.ev}, {msg: () => "Sound removed"}));
+  $("#pSfxAdd").onclick = () => doEdit("sfx_add", {cat: $("#pSfx").value}, {msg: () => "Sound added"});
+}
+
+function drawPending() {
+  const r = RV.review || {}, n = (r.dirty || []).length;
+  if (RV_APPLYING) return;
+  $("#rvPending").textContent = n || r.audio_dirty ? `${n} beat(s) changed${r.audio_dirty ? " + sound" : ""} · Apply re-renders only these` :
+    (r.state === "reviewed" ? "Reviewed ✓ — no pending changes" : "No pending changes");
+  $("#rvApply").disabled = !(n || r.audio_dirty);
+  $("#rvUndo").disabled = !RV.undo_available;
+}
+$("#rvUndo").onclick = async () => { try { const r = await api(`/api/review/${CUR_JOB}/undo`, {}); toast("Undone: " + r.undone); await loadReview(false); } catch (e) { toast(e.message, 5000); } };
+$("#rvApply").onclick = async () => {
+  try { await api(`/api/review/${CUR_JOB}/apply`, {}); } catch (e) { return toast(e.message, 6000); }
+  RV_APPLYING = true; $("#rvApply").disabled = $("#rvUndo").disabled = true;
+  const poll = async () => {
+    const d = await api("/api/jobs/" + CUR_JOB), st = d.status || {};
+    $("#rvPending").textContent = `Applying… ${(st.log || []).slice(-1)[0] || ""}`;
+    if (st.state === "running" || st.state === "queued") return setTimeout(poll, 1500);
+    RV_APPLYING = false;
+    if (st.state === "error") { toast("Apply failed: " + (st.error || "see log"), 8000); }
+    else toast("Changes applied — the video is updated");
+    await loadReview(true);
+  };
+  setTimeout(poll, 800);
+};
 
 $("#saveKeys").onclick = async () => {
   const keys = {}; document.querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
@@ -352,7 +653,13 @@ $("#diagCopy").onclick = async () => {
   catch { const r = document.createRange(); r.selectNode($("#diagReport")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selected — press Cmd+C"); }
 };
 
-(async () => { await loadStatus(); await loadVoices(false); })();
+(async () => {
+  await loadStatus(); await loadVoices(false);
+  const h = location.hash.slice(1).split("/");
+  if (h[0] === "videos") document.querySelector('nav button[data-tab="jobs"]').click();
+  else if (h[0] === "video" && h[1]) { document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.tab === "jobs")); await loadJobs(); openJob(h[1]); }
+  else if (h[0] === "review" && h[1]) { await loadJobs(); openReview(h[1]); }
+})();
 </script>
 </body>
 </html>

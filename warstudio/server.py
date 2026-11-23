@@ -13,11 +13,11 @@ import time
 import webbrowser
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from . import ROOT, VERSION, ai33
+from . import ROOT, VERSION, ai33, edits
 from .config import (DATA_DIR, FAVORITES_FILE, PROJECTS_DIR, KEY_NAMES, list_styles, load_keys, load_settings,
                      masked_keys, save_keys, save_settings)
 from .pipeline import create_project, run_project, STEPS
@@ -32,10 +32,27 @@ def _worker():
     while True:
         proj, from_step = JOBS.get()
         try:
-            run_project(proj, from_step)
+            if from_step == "__apply__":
+                _run_apply(proj)
+            else:
+                run_project(proj, from_step)
         except Exception:
             pass
         JOBS.task_done()
+
+
+def _run_apply(proj):
+    import traceback
+    from .pipeline import Logger
+    log = Logger(proj)
+    log.set(state="running", step="render", progress=0, error=None)
+    try:
+        edits.apply(proj, log)
+        log.set(state="done", step=None, progress=1)
+    except Exception as e:
+        log(f"ERROR: {e}")
+        log(traceback.format_exc()[-1500:])
+        log.set(state="error", error=str(e)[:500])
 
 
 threading.Thread(target=_worker, daemon=True).start()
@@ -186,12 +203,184 @@ def new_job(j: NewJob):
 @app.get("/api/jobs")
 def jobs():
     out = []
-    for p in sorted(PROJECTS_DIR.glob("*/project.json"), reverse=True)[:50]:
-        meta = read_json(p)
+    for p in sorted(PROJECTS_DIR.glob("*/project.json"), reverse=True)[:200]:
+        meta = read_json(p) or {}
         st = read_json(p.parent / "status.json", {}) or {}
+        qc = read_json(p.parent / "qc.json", {}) or {}
+        rv = read_json(p.parent / "review.json", {}) or {}
         out.append({"id": p.parent.name, "title": meta.get("title"), "state": st.get("state"), "step": st.get("step"),
-                    "progress": st.get("progress", 0), "has_final": (p.parent / "final.mp4").exists()})
+                    "progress": st.get("progress", 0), "has_final": (p.parent / "final.mp4").exists(),
+                    "created": meta.get("created"), "seconds": qc.get("video_seconds"), "style": meta.get("style"),
+                    "no_footage": len(qc.get("beats_without_footage", [])), "review": rv.get("state", "unreviewed"),
+                    "dummy": meta.get("dummy", False)})
     return out
+
+
+@app.get("/api/jobs/{jid}/poster")
+def poster(jid: str):
+    proj = PROJECTS_DIR / Path(jid).name
+    final = proj / "final.mp4"
+    if not final.exists():
+        raise HTTPException(404)
+    out = proj / "poster.jpg"
+    if not out.exists() or out.stat().st_mtime < final.stat().st_mtime:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "3", "-i", str(final), "-frames:v", "1",
+                        "-vf", "scale=480:-1", str(out)], capture_output=True)
+    if not out.exists():
+        raise HTTPException(404)
+    return FileResponse(out, media_type="image/jpeg")
+
+
+# ---------- review editor ----------
+
+class EditReq(BaseModel):
+    action: str
+    bid: int | None = None
+    sid: int | None = None
+    data: dict = {}
+
+
+class SearchReq(BaseModel):
+    query: str
+
+
+class ReviewedReq(BaseModel):
+    reviewed: bool = True
+
+
+def _proj(jid):
+    p = PROJECTS_DIR / Path(jid).name
+    if not (p / "project.json").exists():
+        raise HTTPException(404, "video not found")
+    return p
+
+
+@app.get("/api/review/{jid}")
+def review(jid: str):
+    proj = _proj(jid)
+    if not (proj / "beats.json").exists():
+        raise HTTPException(400, "this video has no timeline yet")
+    d = edits.review_data(proj)
+    d["status"] = (read_json(proj / "status.json", {}) or {}).get("state")
+    d["final_mtime"] = int((proj / "final.mp4").stat().st_mtime) if (proj / "final.mp4").exists() else 0
+    return d
+
+
+@app.post("/api/review/{jid}/edit")
+def review_edit(jid: str, r: EditReq):
+    proj = _proj(jid)
+    x = r.data or {}
+    try:
+        if r.action == "clip":
+            edits.swap_clip(proj, r.bid, x.get("candidate") or {})
+        elif r.action == "offset":
+            edits.set_offset(proj, r.bid, float(x.get("start", 0)))
+        elif r.action == "grade":
+            edits.set_grade(proj, r.bid, x.get("footage_class", ""))
+        elif r.action == "overlay":
+            edits.set_overlay(proj, r.bid, x.get("kind", "measure"), x.get("line1", ""), x.get("line2", ""))
+        elif r.action == "overlay_remove":
+            edits.remove_overlay(proj, r.bid)
+        elif r.action == "sfx_add":
+            edits.sfx_add(proj, r.bid, x.get("cat", ""), float(x.get("offset", 0.12)))
+        elif r.action == "sfx_remove":
+            edits.sfx_remove(proj, int(x.get("index", -1)))
+        elif r.action == "narration":
+            return {"ok": True, "result": edits.edit_narration(proj, r.sid, x.get("text", ""))}
+        else:
+            raise HTTPException(400, f"unknown action {r.action}")
+    except edits.EditError as e:
+        raise HTTPException(400, str(e))
+    except ai33.Ai33Error as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/review/{jid}/search")
+def review_search(jid: str, r: SearchReq):
+    _proj(jid)
+    if not r.query.strip():
+        raise HTTPException(400, "type something to search")
+    try:
+        return {"results": edits.search(_proj(jid), r.query.strip())}
+    except edits.EditError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/review/{jid}/upload")
+async def review_upload(jid: str, bid: int, name: str, request: Request):
+    proj = _proj(jid)
+    tmp = proj / "review" / f"upload_{int(time.time())}_{Path(name).name}"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, "wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    try:
+        from .config import load_style
+        style = load_style(read_json(proj / "project.json")["style"])
+        await __import__("anyio").to_thread.run_sync(lambda: edits.use_upload(proj, bid, tmp, Path(name).name, style))
+    except edits.EditError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(400, "could not read this video file: " + str(e)[-200:])
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.post("/api/review/{jid}/undo")
+def review_undo(jid: str):
+    try:
+        return {"ok": True, "undone": edits.undo(_proj(jid))}
+    except edits.EditError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/review/{jid}/apply")
+def review_apply(jid: str):
+    proj = _proj(jid)
+    rv = read_json(proj / "review.json", {}) or {}
+    if not rv.get("dirty") and not rv.get("audio_dirty"):
+        raise HTTPException(400, "no changes to apply")
+    st = read_json(proj / "status.json", {}) or {}
+    if st.get("state") in ("running", "queued"):
+        raise HTTPException(409, "already processing")
+    st["state"] = "queued"
+    write_json(proj / "status.json", st)
+    JOBS.put((proj, "__apply__"))
+    return {"ok": True}
+
+
+@app.post("/api/review/{jid}/reviewed")
+def review_mark(jid: str, r: ReviewedReq):
+    return {"ok": True, "state": edits.set_reviewed(_proj(jid), r.reviewed)}
+
+
+@app.get("/api/review/{jid}/thumb/{bid}")
+def review_thumb(jid: str, bid: int):
+    proj = _proj(jid)
+    seg = proj / "segments" / f"seg_{bid:05d}.mp4"
+    if not seg.exists():
+        raise HTTPException(404)
+    tdir = proj / "thumbs"
+    tdir.mkdir(exist_ok=True)
+    out = tdir / f"{bid}_{int(seg.stat().st_mtime)}.jpg"
+    if not out.exists():
+        for old in tdir.glob(f"{bid}_*.jpg"):
+            old.unlink()
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "0.4", "-i", str(seg), "-frames:v", "1",
+                        "-vf", "scale=320:-1", "-q:v", "5", str(out)], capture_output=True)
+    if not out.exists():
+        raise HTTPException(404)
+    return FileResponse(out, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+
+@app.get("/files/{jid}/previews/{name}")
+def preview_file(jid: str, name: str):
+    p = _proj(jid) / "previews" / Path(name).name
+    if not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p)
 
 
 @app.get("/api/jobs/{jid}")
@@ -309,10 +498,25 @@ def _restart():
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
+def recover_interrupted():
+    """Jobs live in memory; if the app was closed mid-run, mark those videos as interrupted."""
+    n = 0
+    for st_path in PROJECTS_DIR.glob("*/status.json"):
+        st = read_json(st_path, {}) or {}
+        if st.get("state") in ("running", "queued"):
+            st["state"] = "error"
+            st["error"] = "interrupted (WarStudio was closed while this was processing). Use 'Re-run from step' to continue."
+            st.setdefault("log", []).append("interrupted: app restarted")
+            write_json(st_path, st)
+            n += 1
+    return n
+
+
 def serve(port=8765, open_browser=True):
     import uvicorn
     from .sfx import ensure_defaults
     ensure_defaults()
+    recover_interrupted()
     if open_browser and not os.environ.get("WARSTUDIO_NO_BROWSER"):
         threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

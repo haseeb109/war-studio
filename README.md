@@ -17,9 +17,16 @@ Then double-click **`WarStudio.command`** (or `uv run python run.py gui`). The G
 1. **Settings** tab: paste your API keys (stored only in `~/.config/warstudio/keys.env`).
 2. **Voices** tab: *Load voices from ai33*, preview, star your favorites (favorites show first everywhere).
 3. **Create** tab: title, script, voice, style → *Start production*.
-4. **Videos** tab: live progress per step, log, final video, contact sheet. *Re-run from step* redoes only what you need.
-5. **Check for update** (top right): pulls the latest version from GitHub and restarts. One click.
-6. **System Check** tab: tests every installed piece one by one and gives a report. **Quick** (~1 min, free) or **Full** (~3-5 min, a few cents: HyperFrames, CLIP on the Apple GPU, Gemini, an ai33 sample, real clip downloads, a mini dry-run video). When something breaks, press **Copy report** and paste it to Claude. A failed video also has a **Copy log** button.
+4. **Videos** tab: your video library. Open a video to watch it, download it, see the contact sheet and footage log, or *Mark as reviewed*.
+5. **Review timeline** (button under every finished video): the whole edit beat by beat. Flagged beats (low match, generic search, no footage) are coloured; jump between them with *Flagged ‹ ›*. Click a beat to:
+   - swap its clip (the ranked top 5, a new search, or your own file), pick which part of the clip plays,
+   - change the look (real / FLIR / cockpit / control room / map),
+   - add, edit or remove the callout,
+   - add or remove sound effects,
+   - rewrite the narration sentence and re-voice it (the rest of the timeline shifts by whole frames, so nothing else re-renders).
+   *Apply changes* re-renders only the changed beats (seconds, not minutes). *Undo* steps back through every edit.
+6. **Check for update** (top right): pulls the latest version from GitHub and restarts. One click.
+7. **System Check** tab: tests every installed piece one by one and gives a report. **Quick** (~1 min, free) or **Full** (~3-5 min, a few cents: HyperFrames, CLIP on the Apple GPU, Gemini, an ai33 sample, real clip downloads, a mini dry-run video). When something breaks, press **Copy report** and paste it to Claude. A failed video also has a **Copy log** button.
 
 Tip: tick **Dry run** for a first test: silent voice and no AI credits, but real footage search, ranking and render.
 

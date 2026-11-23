@@ -135,7 +135,7 @@ def run_step(proj, keys, settings, style, log):
                 s -= 0.05
             c["clip_score"] = round(s, 4)
         top = sorted(cl, key=lambda c: -c["clip_score"])[:k]
-        winner, gscore = top[0], None
+        winner, gscore, scores = top[0], None, None
         if gem and gem_fail >= 3:
             log("Gemini failed 3 times in a row; using CLIP only for the rest of this run")
             gem = None
@@ -152,7 +152,12 @@ def run_step(proj, keys, settings, style, log):
             except Exception as e:
                 gem_fail += 1
                 log(f"beat {bid}: Gemini rerank failed ({str(e)[:80]}), using CLIP top-1")
-        winner = dict(winner, gemini_score=gscore)
+        keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit", "clip_score", "query")
+        alts = [{x: c.get(x) for x in keep} for c in top]
+        if isinstance(scores, list):
+            for a, s_ in zip(alts, scores):
+                a["gemini_score"] = s_
+        winner = dict(winner, gemini_score=gscore, alternates=alts)
         picks[bid] = winner
         recent.append((b["start"], f"{winner['source']}:{winner['id']}"))
         if int(bid) % 10 == 0:

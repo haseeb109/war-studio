@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from .. import ai33
-from ..util import duration, run, write_json, read_json
+from ..util import run, write_json, read_json
 
 ABBREV = ["U.S.", "U.K.", "Mr.", "Mrs.", "Dr.", "St.", "No.", "Mk.", "Lt.", "Col.", "Gen.", "Sgt.", "Capt.", "Adm.",
           "Cmdr.", "vs.", "e.g.", "i.e.", "approx.", "Jr.", "Sr.", "Inc.", "Co.", "a.m.", "p.m."]
@@ -64,16 +64,20 @@ def run_step(proj, keys, settings, voice_id, log, dummy=False):
             credits = ai33.tts_many(keys["AI33_API_KEY"], items, voice_id, settings.get("tts_model"),
                                     int(settings.get("tts_concurrency", 4)),
                                     on_progress=lambda d, n: log(f"voice {d}/{n}", progress=d / max(n, 1)))
-    timeline, t = [], 0.0
+    # Decode every sentence to PCM and join sample-exactly. (ffmpeg's concat demuxer drops each mp3's
+    # encoder padding, which made vo.wav drift ahead of the timeline by ~35 ms per sentence.)
+    import numpy as np
+    from ..sfx import load_audio, write_wav
+    SR = 48000
+    timeline, t, chunks = [], 0.0, []
     for i, s in enumerate(sents):
         f = vdir / f"s{i:04d}.mp3"
-        d = duration(f)
-        timeline.append({"sid": i, "text": s, "start": round(t, 3), "end": round(t + d, 3), "file": str(f.relative_to(proj))})
+        a = load_audio(f, SR)
+        chunks.append(a)
+        d = len(a) / SR
+        timeline.append({"sid": i, "text": s, "start": round(t, 6), "end": round(t + d, 6), "file": str(f.relative_to(proj))})
         t += d
-    lst = proj / "vo_concat.txt"
-    lst.write_text("".join(f"file '{(proj / x['file']).resolve()}'\n" for x in timeline))
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
-         "-ar", "48000", "-ac", "1", str(proj / "vo.wav")])
+    write_wav(proj / "vo.wav", np.concatenate(chunks) if chunks else np.zeros(SR, np.float32), SR)
     data = {"sentences": timeline, "total": round(t, 3), "chars": chars, "credits": credits}
     write_json(out_json, data)
     log(f"VO done: {t:.1f}s, ai33 credits {credits}")

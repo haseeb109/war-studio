@@ -73,6 +73,7 @@ def run_step(proj, settings, style, log, use_hf=True):
     if plan is None:
         plan = {str(k): v for k, v in ovl.plan(beats, specs, style).items()}
         write_json(proj / "overlays.json", plan)
+    use_hf = use_hf and str(settings.get("hyperframes", True)).lower() not in ("false", "0", "no")
     rendered = ovl.render_all({k: v for k, v in plan.items()}, style, proj / "overlays", log, use_hf=use_hf)
 
     segdir = proj / "segments"
@@ -115,8 +116,10 @@ def run_step(proj, settings, style, log, use_hf=True):
 
     log("mixing audio (voice + SFX + music)")
     sfx.ensure_defaults()
-    events = sfx.plan_events(beats, specs, {int(k) for k in plan}, style)
-    write_json(proj / "sfx_events.json", events)
+    events = read_json(proj / "sfx_events.json")
+    if events is None:
+        events = sfx.plan_events(beats, specs, {int(k) for k in plan}, style)
+        write_json(proj / "sfx_events.json", events)
     mixwav = proj / "mix.wav"
     sfx.mix(proj / "vo.wav", events, total, style, mixwav, settings.get("music_file", ""))
 

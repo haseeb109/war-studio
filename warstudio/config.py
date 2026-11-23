@@ -33,6 +33,7 @@ DEFAULT_SETTINGS = {
     "rerank_top_k": 5,
     "music_file": "",
     "encoder": "auto",
+    "hyperframes": True,
 }
 
 

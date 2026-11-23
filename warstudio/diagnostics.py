@@ -371,8 +371,14 @@ def chk_mini_run(c):
         qc = read_json(proj / "qc.json", {})
         drift = qc.get("av_drift_seconds", 99)
         missing = len(qc.get("beats_without_footage", []))
-        st = "ok" if drift < 0.1 and missing == 0 else "warn"
-        return st, f"dry-run video OK: {qc.get('video_seconds')}s, {qc.get('beats')} beats, {missing} without footage, A/V drift {drift}s, {qc.get('integrated_lufs')} LUFS -> projects/{proj.name}"
+        from . import edits
+        t0 = time.time()
+        edits.set_overlay(proj, 0, "label", "SYSTEM CHECK")
+        edits.apply(proj, lambda *a, **k: None)
+        qc2 = read_json(proj / "qc.json", {})
+        edit_ok = abs(qc2.get("av_drift_seconds", 99)) < 0.1
+        st = "ok" if drift < 0.1 and missing == 0 and edit_ok else "warn"
+        return st, f"review edit + partial re-render {'OK' if edit_ok else 'FAILED'} in {time.time() - t0:.0f}s; dry-run video OK: {qc.get('video_seconds')}s, {qc.get('beats')} beats, {missing} without footage, A/V drift {drift}s, {qc.get('integrated_lufs')} LUFS -> projects/{proj.name}"
     return f
 
 

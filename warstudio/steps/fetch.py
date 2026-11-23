@@ -47,7 +47,8 @@ def choose_start(src_dur, need, used_offsets):
 
 def fetch_one(pick, start, need, out, W, H, fps):
     vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={fps},format=yuv420p"
-    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start}", "-user_agent", UA, "-i", pick["video_url"],
+    ua = ["-user_agent", UA] if str(pick["video_url"]).startswith("http") else []
+    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start}", *ua, "-i", pick["video_url"],
          "-t", f"{need:.2f}", "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(out)],
         timeout=600)
     return out
@@ -68,7 +69,7 @@ def run_step(proj, keys, style, log):
     for i, b in enumerate(beats):
         bid = str(b["id"])
         p = picks.get(bid)
-        if not p or bid in fetched:
+        if not p or fetched.get(bid):
             continue
         end = vo_total if i == len(beats) - 1 else b["end"]
         need = (end - b["start"]) + PAD
@@ -81,8 +82,14 @@ def run_step(proj, keys, style, log):
                 resolve_dvids(p, keys.get("DVIDS_API_KEY"))
             k = f"{p['source']}:{p['id']}"
             with lock:
-                start = choose_start(float(p.get("duration") or 0), need, used.setdefault(k, []))
-                used[k].append(start)
+                if p.get("forced_start") is not None:
+                    start = round(float(p["forced_start"]), 2)
+                else:
+                    start = choose_start(float(p.get("duration") or 0), need, used.setdefault(k, []))
+                used.setdefault(k, []).append(start)
+            if p["source"] == "user":
+                return bid, {"file": p["file"], "start": 0, "length": duration(p["file"]), "source": "user",
+                             "id": p["id"], "page_url": "", "credit": "own footage", "title": p.get("title", "")}
             out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_{int(start * 100)}_{int(need * 100)}.mp4"
             if not out.exists():
                 fetch_one(p, start, need, out, W, H, fps)

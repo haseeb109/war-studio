@@ -63,7 +63,7 @@ def run_project(proj, from_step=None):
         idx = STEPS.index(from_step)
         cleanup = {"voice": ["vo.json", "vo.wav"], "beats": ["beats.json"], "specs": ["specs.json"],
                    "search": ["candidates.json"], "rank": ["picks.json"], "fetch": ["fetched.json"],
-                   "render": ["overlays.json", "final.mp4"], "qc": []}
+                   "render": ["overlays.json", "sfx_events.json", "final.mp4"], "qc": []}
         for s in STEPS[idx:]:
             for f in cleanup[s]:
                 (proj / f).unlink(missing_ok=True)

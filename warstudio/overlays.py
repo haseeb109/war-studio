@@ -177,13 +177,21 @@ def render_all(overlay_plan, style, work, log, use_hf=True):
     out = {}
     for bid, ov in overlay_plan.items():
         res = None
+        key = hashlib.md5(json.dumps({k: ov[k] for k in ("kind", "line1", "line2", "duration")}, sort_keys=True).encode()).hexdigest()[:12]
+        cached_webm, cached_png = work / f"ov_{key}.webm", work / f"ov_{key}.png"
+        if hf and cached_webm.exists():
+            out[bid] = dict(ov, path=str(cached_webm), type="webm")
+            continue
+        if not hf and cached_png.exists():
+            out[bid] = dict(ov, path=str(cached_png), type="png")
+            continue
         if hf:
-            res = render_webm(ov, style, work / f"ov_{bid}.webm", work)
+            res = render_webm(ov, style, cached_webm, work)
             if res is None:
                 hf = False
                 log("HyperFrames render failed once; using PNG overlays for the rest")
         if res:
             out[bid] = dict(ov, path=str(res), type="webm")
         else:
-            out[bid] = dict(ov, path=str(render_png(ov, style, work / f"ov_{bid}.png")), type="png")
+            out[bid] = dict(ov, path=str(render_png(ov, style, cached_png)), type="png")
     return out
