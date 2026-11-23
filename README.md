@@ -36,7 +36,10 @@ Tip: tick **Dry run** for a first test: silent voice and no AI credits, but real
 |---|---|---|
 | `AI33_API_KEY` | Voiceover (ai33.pro, ElevenLabs voices) | Yes (not for dry run) |
 | `DEEPSEEK_API_KEY` | Brain: beat -> shot spec. Default provider: DeepSeek official API (`https://api.deepseek.com`, model `deepseek-flash`). Settings → *Script planner* can switch to Hive or any OpenAI-compatible API (`HIVE_API_KEY` / `CUSTOM_BRAIN_API_KEY`) | Recommended (fallback specs otherwise) |
-| `GEMINI_API_KEY` | Rerank: picks the best of the top-5 clips from one collage image | Recommended (CLIP top-1 otherwise) |
+| `GROQ_API_KEY` | **Clip rerank only** (never the script brain): a Groq vision model picks the best of the top-5 clips from one collage image. Free key at console.groq.com/keys | Recommended |
+| `GEMINI_API_KEY` | Rerank: picks the best of the top-5 clips from one collage image | Optional backup for rerank |
+
+Rerank order is the `reranker` setting: `auto` (Groq, then Gemini, then CLIP only), `groq`, `gemini` or `clip`. A provider that runs out of daily quota is dropped for the rest of the run and the next one takes over; the log line `reranked by: ...` shows who ranked how many beats.
 | `DVIDS_API_KEY` | Real US military footage (public domain) — the most important source | At least one footage key |
 | `PEXELS_API_KEY` | Stock footage | |
 | `PIXABAY_API_KEY` | Stock footage | |

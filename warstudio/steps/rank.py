@@ -2,9 +2,9 @@
 
 1. Download each candidate's preview image (small JPEG).
 2. CLIP (local, free) scores preview vs beat text -> top K.
-3. The K previews become ONE numbered collage -> Gemini Flash scores them 0-10 -> winner.
+3. The K previews become ONE numbered collage -> a vision model (Groq, else Gemini) scores them 0-10 -> winner.
    (One image per call instead of K keeps rerank cost ~10x lower.)
-Without a Gemini key the CLIP top-1 wins. A clip from the same source video is not reused within
+Without a Groq/Gemini key the CLIP top-1 wins. A clip from the same source video is not reused within
 `same_source_cooldown_seconds` of the timeline.
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from ..llm import gemini_pick, resolve_gemini_model, ModelGone
+from ..rerank import Reranker
 from ..util import download, read_json, write_json
 
 _CLIP = {}
@@ -79,14 +79,14 @@ def diverse_top(cands, k, per_source_min=2):
     return sorted(top, key=lambda c: -c.get("clip_score", -1))
 
 
-def make_collage(paths, out):
-    tw, th = 512, 288
+def make_collage(paths, out, tile=(512, 288)):
+    tw, th = tile
     cols = 3 if len(paths) > 4 else 2
     rows = (len(paths) + cols - 1) // cols
     im = Image.new("RGB", (cols * tw, rows * th), (0, 0, 0))
     d = ImageDraw.Draw(im)
     try:
-        f = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 44)
+        f = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", int(th * 0.15))
     except Exception:
         f = ImageFont.load_default()
     for i, p in enumerate(paths):
@@ -96,8 +96,9 @@ def make_collage(paths, out):
             t = Image.new("RGB", (tw, th), (40, 40, 40))
         x, y = (i % cols) * tw, (i // cols) * th
         im.paste(t, (x, y))
-        d.rectangle([x, y, x + 64, y + 60], fill=(255, 196, 0))
-        d.text((x + 18, y + 6), str(i + 1), font=f, fill=(0, 0, 0))
+        bw = int(th * 0.21)
+        d.rectangle([x, y, x + bw + 4, y + bw], fill=(255, 196, 0))
+        d.text((x + bw * 0.28, y + bw * 0.1), str(i + 1), font=f, fill=(0, 0, 0))
     im.save(out, quality=85)
     return out
 
@@ -123,19 +124,10 @@ def run_step(proj, keys, settings, style, log):
     pdir.mkdir(exist_ok=True)
     k = int(settings.get("rerank_top_k", 5))
     cool = style["footage"]["same_source_cooldown_seconds"]
-    gem = keys.get("GEMINI_API_KEY")
-    gmodel = None
-    if gem:
-        try:
-            gmodel = resolve_gemini_model(gem, settings.get("gemini_model", "auto"))
-            if settings.get("gemini_model", "auto") not in ("auto", gmodel):
-                log(f"Gemini model '{settings.get('gemini_model')}' is not available for this key; using {gmodel}")
-        except Exception as e:
-            log(f"Gemini unavailable ({str(e)[:160]}); ranking with CLIP only")
-            gem = None
-    log(f"ranking with CLIP{f' + Gemini rerank ({gmodel})' if gem else ' only (no Gemini key)'}")
+    from ..config import save_settings
+    rr = Reranker(keys, settings, log, save_settings)
+    log(f"ranking with {rr.label}")
     recent = []  # (time, source_key)
-    gem_fail = 0
     for b in beats:
         bid = str(b["id"])
         if bid in picks:
@@ -168,38 +160,25 @@ def run_step(proj, keys, settings, style, log):
                 s -= 0.05
             c["clip_score"] = round(s, 4)
         top = diverse_top(cl, k)
-        winner, gscore, scores = top[0], None, None
-        if gem and gem_fail >= 3:
-            log("Gemini failed 3 times in a row; using CLIP only for the rest of this run")
-            gem = None
-        if gem and len(top) > 1:
-            col = make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg")
-            try:
-                try:
-                    res, _ = gemini_pick(gem, gmodel, col, _prompt(b, sp, len(top)))
-                except ModelGone as gone:
-                    new = resolve_gemini_model(gem, "auto")
-                    log(f"Gemini model {gmodel} is not available ({str(gone)[-120:]}); switching to {new}")
-                    gmodel = new
-                    if settings.get("gemini_model", "auto") != "auto":
-                        from ..config import save_settings
-                        save_settings({"gemini_model": "auto"})
-                    res, _ = gemini_pick(gem, gmodel, col, _prompt(b, sp, len(top)))
+        winner, gscore, scores, by = top[0], None, None, None
+        if rr.active and len(top) > 1:
+            res, by = rr.pick(lambda tile: make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg", tile),
+                              _prompt(b, sp, len(top)), tag=f"beat {bid}: ")
+            if res:
                 scores = res.get("scores") or []
-                best = int(res.get("best") or (scores.index(max(scores)) + 1 if scores else 1))
+                try:
+                    best = int(res.get("best") or (scores.index(max(scores)) + 1 if scores else 1))
+                except (TypeError, ValueError):
+                    best = 1
                 if 1 <= best <= len(top):
                     winner = top[best - 1]
                     gscore = scores[best - 1] if len(scores) >= best else None
-                gem_fail = 0
-            except Exception as e:
-                gem_fail += 1
-                log(f"beat {bid}: Gemini rerank failed ({str(e)[:80]}), using CLIP top-1")
         keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit", "clip_score", "query")
         alts = [{x: c.get(x) for x in keep} for c in top]
         if isinstance(scores, list):
             for a, s_ in zip(alts, scores):
                 a["gemini_score"] = s_
-        winner = dict(winner, gemini_score=gscore, alternates=alts)
+        winner = dict(winner, gemini_score=gscore, rerank_by=by or "clip", alternates=alts)
         picks[bid] = winner
         recent.append((b["start"], f"{winner['source']}:{winner['id']}"))
         if int(bid) % 10 == 0:
@@ -208,6 +187,8 @@ def run_step(proj, keys, settings, style, log):
     write_json(out_path, picks)
     from collections import Counter
     mix = Counter((v or {}).get("source", "none") for v in picks.values())
+    by = Counter((v or {}).get("rerank_by", "clip") for v in picks.values() if v)
+    log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by.most_common()))
     log(f"rank done; {sum(1 for v in picks.values() if not v)} beats without a pick; picks per source: " +
         ", ".join(f"{a} {b}" for a, b in mix.most_common()))
     return picks

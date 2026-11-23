@@ -112,3 +112,82 @@ def gemini_pick(key, model, image_path, prompt, timeout=90):
     d = r.json()
     text = d["candidates"][0]["content"]["parts"][0]["text"]
     return extract_json(text), d.get("usageMetadata") or {}
+
+
+# ---------------------------------------------------------------- Groq (clip rerank only)
+GROQ_URL = "https://api.groq.com/openai/v1"
+# Vision models on Groq, best first. "auto" takes the first one this key can see.
+GROQ_VISION_MODELS = ["qwen/qwen3.6-27b", "meta-llama/llama-4-maverick-17b-128e-instruct",
+                      "meta-llama/llama-4-scout-17b-16e-instruct"]
+_GROQ_MODELS = {}
+
+
+class QuotaExhausted(LLMError):
+    """Daily / long quota used up: stop calling this provider for the rest of the run."""
+
+
+def groq_models(key):
+    if key not in _GROQ_MODELS:
+        r = httpx.get(f"{GROQ_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=25)
+        if r.status_code >= 400:
+            raise LLMError("groq " + _one_line_error(r))
+        _GROQ_MODELS[key] = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+    return _GROQ_MODELS[key]
+
+
+def resolve_groq_model(key, wanted="auto"):
+    have = groq_models(key)
+    if wanted and wanted != "auto":
+        if wanted in have:
+            return wanted
+    for m in GROQ_VISION_MODELS:
+        if m in have:
+            return m
+    vis = [m for m in have if any(t in m.lower() for t in ("-vl", "vision", "llama-4", "qwen3.6"))]
+    if vis:
+        return vis[0]
+    raise LLMError("no vision model available on this Groq key")
+
+
+def _retry_after(r):
+    try:
+        return float(r.headers.get("retry-after") or 0)
+    except ValueError:
+        return 0.0
+
+
+def groq_pick(key, model, image_path, prompt, timeout=90, sleep=None, max_wait=75):
+    """Collage + prompt to a Groq vision model (OpenAI format), expect JSON back.
+    Per-minute 429s are waited out (Retry-After); a long wait means the daily quota is gone."""
+    import time as _t
+    sleep = sleep or _t.sleep
+    if not key:
+        raise LLMError("GROQ_API_KEY missing")
+    img = base64.b64encode(open(image_path, "rb").read()).decode()
+    body = {"model": model, "temperature": 0.1, "max_completion_tokens": 400,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt + "\nReply with the JSON only."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}}]}]}
+    if "qwen" in model:
+        body["reasoning_effort"] = "none"       # no thinking tokens: faster and cheaper on the token quota
+    for attempt in range(5):
+        r = httpx.post(f"{GROQ_URL}/chat/completions", json=body, timeout=timeout,
+                       headers={"Authorization": f"Bearer {key}"})
+        if r.status_code == 400 and "reasoning" in r.text and "reasoning_effort" in body:
+            body.pop("reasoning_effort")
+            continue
+        if r.status_code == 429:
+            wait = _retry_after(r) or 20
+            if wait > max_wait or "per day" in r.text.lower() or "(tpd)" in r.text.lower() or "(rpd)" in r.text.lower():
+                raise QuotaExhausted("groq daily quota used up: " + _one_line_error(r))
+            sleep(wait + 0.5)
+            continue
+        if r.status_code == 404:
+            raise ModelGone(f"groq model '{model}' " + _one_line_error(r))
+        if r.status_code >= 400:
+            raise LLMError("groq " + _one_line_error(r))
+        d = r.json()
+        text = d["choices"][0]["message"].get("content") or ""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+        return extract_json(text), d.get("usage") or {}
+    raise LLMError("groq: still rate limited after 5 tries")

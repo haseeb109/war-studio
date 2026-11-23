@@ -280,6 +280,24 @@ def chk_brain():
     return ("ok" if ok else "fail"), msg
 
 
+def chk_groq():
+    from .connect import test_groq
+    key = load_keys().get("GROQ_API_KEY")
+    if not key:
+        return "warn", "GROQ_API_KEY not set (optional: free clip rerank)"
+    ok, msg = test_groq(key)
+    return ("ok" if ok else "fail"), msg
+
+
+def chk_reranker():
+    from .rerank import chain_order
+    keys, s = load_keys(), load_settings()
+    order = chain_order(s.get("reranker", "auto"), keys)
+    if not order:
+        return "warn", f"reranker={s.get('reranker', 'auto')}: CLIP only. Add a free Groq key for better clip matching"
+    return "ok", f"reranker={s.get('reranker', 'auto')}: " + " -> ".join(order) + " -> CLIP"
+
+
 def chk_gemini():
     from .connect import test_gemini
     key = load_keys().get("GEMINI_API_KEY")
@@ -415,7 +433,9 @@ def run_all(full=False, on_update=None):
     c.run("APIs", "keys", chk_keys)
     c.run("APIs", "ai33 key + voice library", chk_ai33_key)
     c.run("APIs", "brain (script planner)", chk_brain)
+    c.run("APIs", "Groq key (rerank only)", chk_groq)
     c.run("APIs", "Gemini key + model", chk_gemini)
+    c.run("APIs", "rerank order", chk_reranker)
     for src in ("dvids", "commons", "pexels", "pixabay"):
         c.run("Footage", f"{src}", _source_check(c, src, full))
     if full:

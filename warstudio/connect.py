@@ -14,7 +14,7 @@ from .util import UA
 
 SERVICES = {
     "AI33_API_KEY": "ai33", "DEEPSEEK_API_KEY": "deepseek", "HIVE_API_KEY": "hive", "CUSTOM_BRAIN_API_KEY": "custom",
-    "GEMINI_API_KEY": "gemini", "DVIDS_API_KEY": "dvids", "PEXELS_API_KEY": "pexels", "PIXABAY_API_KEY": "pixabay",
+    "GROQ_API_KEY": "groq", "GEMINI_API_KEY": "gemini", "DVIDS_API_KEY": "dvids", "PEXELS_API_KEY": "pexels", "PIXABAY_API_KEY": "pixabay",
 }
 
 
@@ -70,6 +70,27 @@ def test_ai33(key):
     from . import ai33
     vs, source = ai33.list_voices(key)
     return True, f"key accepted · voice library: {len(vs)} voices ({source})"
+
+
+def test_groq(key):
+    """Real vision call on a tiny image, so a key that can't see any vision model fails here, not mid-run."""
+    if not key:
+        return False, "GROQ_API_KEY is empty"
+    from .llm import _GROQ_MODELS, resolve_groq_model, groq_pick
+    _GROQ_MODELS.pop(key, None)
+    try:
+        model = resolve_groq_model(key, load_settings().get("groq_vision_model", "auto"))
+    except Exception as e:
+        return False, str(e)[:220]
+    import tempfile
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d:
+        img = f"{d}/t.jpg"
+        Image.new("RGB", (256, 144), (255, 196, 0)).save(img)
+        t = time.time()
+        res, usage = groq_pick(key, model, img, 'What color is this image? Return JSON {"color": "<one word>"}', max_wait=10)
+    return True, (f"vision OK with {model} ({time.time() - t:.1f}s, {usage.get('total_tokens', '?')} tokens): {res}. "
+                  "Used only for clip rerank.")
 
 
 def test_gemini(key):
@@ -152,7 +173,7 @@ def test(key_name, key=None):
     try:
         if svc in BRAIN_PRESETS:
             return test_brain(svc, key)
-        return {"ai33": test_ai33, "gemini": test_gemini, "pexels": test_pexels,
+        return {"ai33": test_ai33, "groq": test_groq, "gemini": test_gemini, "pexels": test_pexels,
                 "pixabay": test_pixabay, "dvids": test_dvids}[svc](key)
     except httpx.HTTPError as e:
         return False, f"network error: {str(e)[:200]}"

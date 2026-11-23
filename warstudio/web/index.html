@@ -287,7 +287,8 @@ async function loadStatus() {
   $("#ver").textContent = "v" + STATUS.version;
   $("#styleSel").innerHTML = STATUS.styles.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
   const KEYINFO = {AI33_API_KEY: "Voiceover · ai33.pro", DEEPSEEK_API_KEY: "Script planner · platform.deepseek.com",
-    GEMINI_API_KEY: "Clip rerank · aistudio.google.com/apikey", DVIDS_API_KEY: "Real military footage · api.dvidshub.net",
+    GROQ_API_KEY: "Clip rerank ONLY (not the script brain) · free key: console.groq.com/keys",
+    GEMINI_API_KEY: "Clip rerank backup · aistudio.google.com/apikey", DVIDS_API_KEY: "Real military footage · api.dvidshub.net",
     PEXELS_API_KEY: "Stock footage · pexels.com/api", PIXABAY_API_KEY: "Stock footage · pixabay.com/api/docs",
     HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom"};
   const brainKeys = ["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"];
