@@ -498,15 +498,26 @@ def update_check():
 def update_apply():
     if JOBS.unfinished_tasks:
         raise HTTPException(409, "a video is rendering; update after it finishes")
+    # uv rewrites uv.lock on the Mac (different uv version / platform); that local copy is never wanted,
+    # and it blocked `git pull`. Throw it away, and park any other local edits in a stash instead of failing.
+    _git("checkout", "--", "uv.lock")
+    stashed = ""
+    _, dirty = _git("status", "--porcelain", "--untracked-files=no")
+    if dirty.strip():
+        c, o = _git("stash", "push", "-m", f"warstudio auto-update {time.strftime('%Y-%m-%d %H:%M')}")
+        stashed = "local edits saved with git stash: " + dirty.strip().replace("\n", ", ")[:200] if c == 0 else ""
     code, out = _git("pull", "--ff-only", timeout=300)
     if code != 0:
         raise HTTPException(500, "git pull failed: " + out[-400:])
     sync = ""
     if shutil.which("uv"):
-        r = subprocess.run(["uv", "sync"], cwd=ROOT, capture_output=True, text=True, timeout=1200)
+        r = subprocess.run(["uv", "sync", "--frozen"], cwd=ROOT, capture_output=True, text=True, timeout=1200)
+        if r.returncode != 0:
+            r = subprocess.run(["uv", "sync"], cwd=ROOT, capture_output=True, text=True, timeout=1200)
         sync = (r.stdout + r.stderr)[-400:]
+        _git("checkout", "--", "uv.lock")
     threading.Timer(1.0, _restart).start()
-    return {"ok": True, "pull": out[-400:], "sync": sync}
+    return {"ok": True, "pull": out[-400:], "sync": sync, "stashed": stashed}
 
 
 def _restart():

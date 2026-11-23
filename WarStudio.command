@@ -5,4 +5,4 @@ if [ ! -d .venv ]; then
   echo "First run: setting up..."
   bash setup_mac.sh || exit 1
 fi
-uv run python run.py gui
+uv run --frozen python run.py gui
