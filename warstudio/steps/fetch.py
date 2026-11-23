@@ -3,6 +3,7 @@
 ffmpeg reads straight from the clip URL with -ss/-t, so only beat length + padding is pulled.
 Files go to library/raw/ and are reused if the same source segment is picked again (phase-2 library data).
 """
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -62,6 +63,7 @@ def run_step(proj, keys, style, log):
     W, H, fps = style["canvas"]["width"], style["canvas"]["height"], style["canvas"]["fps"]
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     used = {}
+    lock = threading.Lock()
     jobs = []
     for i, b in enumerate(beats):
         bid = str(b["id"])
@@ -78,8 +80,9 @@ def run_step(proj, keys, style, log):
             if p["source"] == "dvids" and not p.get("video_url"):
                 resolve_dvids(p, keys.get("DVIDS_API_KEY"))
             k = f"{p['source']}:{p['id']}"
-            start = choose_start(float(p.get("duration") or 0), need, used.setdefault(k, []))
-            used[k].append(start)
+            with lock:
+                start = choose_start(float(p.get("duration") or 0), need, used.setdefault(k, []))
+                used[k].append(start)
             out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_{int(start * 100)}_{int(need * 100)}.mp4"
             if not out.exists():
                 fetch_one(p, start, need, out, W, H, fps)

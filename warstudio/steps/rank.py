@@ -20,6 +20,8 @@ _CLIP = {}
 
 def _clip(settings):
     if "model" not in _CLIP:
+        import os
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         import open_clip
         import torch
         dev = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,6 +102,7 @@ def run_step(proj, keys, settings, style, log):
     gem = keys.get("GEMINI_API_KEY")
     log(f"ranking with CLIP{' + Gemini rerank' if gem else ' only (no Gemini key)'}")
     recent = []  # (time, source_key)
+    gem_fail = 0
     for b in beats:
         bid = str(b["id"])
         if bid in picks:
@@ -133,6 +136,9 @@ def run_step(proj, keys, settings, style, log):
             c["clip_score"] = round(s, 4)
         top = sorted(cl, key=lambda c: -c["clip_score"])[:k]
         winner, gscore = top[0], None
+        if gem and gem_fail >= 3:
+            log("Gemini failed 3 times in a row; using CLIP only for the rest of this run")
+            gem = None
         if gem and len(top) > 1:
             col = make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg")
             try:
@@ -142,7 +148,9 @@ def run_step(proj, keys, settings, style, log):
                 if 1 <= best <= len(top):
                     winner = top[best - 1]
                     gscore = scores[best - 1] if len(scores) >= best else None
+                gem_fail = 0
             except Exception as e:
+                gem_fail += 1
                 log(f"beat {bid}: Gemini rerank failed ({str(e)[:80]}), using CLIP top-1")
         winner = dict(winner, gemini_score=gscore)
         picks[bid] = winner

@@ -42,12 +42,21 @@ def write_json(path, data):
     tmp.replace(p)
 
 
+def encoder_works(enc):
+    """Encode 10 test frames; True if the encoder really works on this machine."""
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=0.34",
+                        "-pix_fmt", "yuv420p", *encoder_args(enc), "-f", "null", "-"], capture_output=True, text=True)
+    return r.returncode == 0
+
+
 def video_encoder(setting="auto"):
-    """h264_videotoolbox on Apple Silicon (fast), libx264 elsewhere."""
+    """h264_videotoolbox on Apple Silicon (fast) if it really encodes, libx264 otherwise."""
     if setting and setting != "auto":
         return setting
     enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
-    return "h264_videotoolbox" if "h264_videotoolbox" in enc else "libx264"
+    if "h264_videotoolbox" in enc and encoder_works("h264_videotoolbox"):
+        return "h264_videotoolbox"
+    return "libx264"
 
 
 def encoder_args(enc, quality="high"):

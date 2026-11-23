@@ -130,3 +130,21 @@ def test_time_followed_by_punctuation():
     assert overlays.detect("At 1722, the pin lands")["line1"] == "17:22"
     assert overlays.detect("at 17:14.")["line1"] == "17:14"
     assert overlays.detect("at 1,500 feet")["kind"] == "measure"
+
+
+def test_report_has_no_keys_and_marks_failures(tmp_path, monkeypatch):
+    from warstudio import diagnostics
+    monkeypatch.setattr(diagnostics, "REPORT_DIR", tmp_path)
+    res = [{"group": "APIs", "name": "x", "status": "fail", "detail": "boom", "seconds": 0.1, "trace": "Traceback\nValueError: boom"},
+           {"group": "APIs", "name": "y", "status": "ok", "detail": "fine", "seconds": 0.1}]
+    text = diagnostics.write_report(res, False)
+    assert "FAIL  x: boom" in text and "PASS  y" in text and "1 pass, 0 warn, 1 fail" in text
+    assert (tmp_path / "latest.txt").exists()
+
+
+def test_project_names_unique(tmp_path, monkeypatch):
+    from warstudio import pipeline
+    monkeypatch.setattr(pipeline, "PROJECTS_DIR", tmp_path)
+    a = pipeline.slugify("Same Title")
+    (tmp_path / a).mkdir()
+    assert pipeline.slugify("Same Title") != a

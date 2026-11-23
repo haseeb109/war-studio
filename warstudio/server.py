@@ -232,6 +232,50 @@ def open_folder(jid: str):
     return {"ok": True}
 
 
+DIAG = {"running": False, "results": [], "report": "", "full": False, "started": 0}
+
+
+class DiagReq(BaseModel):
+    full: bool = False
+
+
+@app.post("/api/diagnostics")
+def diag_start(d: DiagReq):
+    if DIAG["running"]:
+        raise HTTPException(409, "a check is already running")
+    from . import diagnostics
+
+    def work():
+        DIAG.update(running=True, results=[], report="", full=d.full, started=time.time())
+        try:
+            _, text = diagnostics.run_all(d.full, on_update=lambda r: DIAG.update(results=[dict(x) for x in r]))
+            DIAG["report"] = text
+        except Exception as e:
+            DIAG["report"] = f"System check crashed: {e}"
+        finally:
+            DIAG["running"] = False
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/diagnostics")
+def diag_status():
+    if not DIAG["report"] and not DIAG["running"]:
+        p = DATA_DIR / "diagnostics" / "latest.txt"
+        if p.exists():
+            DIAG["report"] = p.read_text(encoding="utf-8")
+    return {k: DIAG[k] for k in ("running", "results", "report", "full")}
+
+
+@app.get("/api/diagnostics/report.txt")
+def diag_report():
+    p = DATA_DIR / "diagnostics" / "latest.txt"
+    if not p.exists():
+        raise HTTPException(404, "no report yet")
+    return FileResponse(p, media_type="text/plain", filename="warstudio-report.txt")
+
+
 @app.get("/api/update/check")
 def update_check():
     code, out = _git("fetch", "--quiet", "origin")
@@ -261,6 +305,7 @@ def update_apply():
 
 
 def _restart():
+    os.environ["WARSTUDIO_NO_BROWSER"] = "1"
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
@@ -268,6 +313,6 @@ def serve(port=8765, open_browser=True):
     import uvicorn
     from .sfx import ensure_defaults
     ensure_defaults()
-    if open_browser:
+    if open_browser and not os.environ.get("WARSTUDIO_NO_BROWSER"):
         threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

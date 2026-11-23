@@ -56,6 +56,7 @@
     <button data-tab="jobs">Videos</button>
     <button data-tab="voices">Voices</button>
     <button data-tab="settings">Settings</button>
+    <button data-tab="check">System Check</button>
   </nav>
   <div class="spacer"></div>
   <button class="btn ghost" id="updBtn">Check for update</button>
@@ -97,7 +98,8 @@
       <div style="display:flex;align-items:center;gap:12px"><h2 id="jdTitle" style="flex:1;margin:0"></h2>
         <select id="resumeSel" style="width:auto"></select>
         <button class="btn ghost" id="resumeBtn">Re-run from step</button>
-        <button class="btn ghost" id="openBtn">Open folder</button></div>
+        <button class="btn ghost" id="openBtn">Open folder</button>
+        <button class="btn ghost" id="copyLog">Copy log</button></div>
       <div class="steps" id="jdSteps"></div>
       <div id="jdFiles"></div>
       <pre id="jdLog"></pre>
@@ -137,7 +139,27 @@
       <div id="setFields"></div>
       <div style="margin-top:14px"><button class="btn ghost" id="saveSet">Save settings</button></div>
     </div>
-    <div class="card"><h2>System check</h2><div class="tools" id="tools"></div></div>
+    <div class="card"><h2>Installed tools</h2><div class="tools" id="tools"></div></div>
+  </section>
+
+  <!-- SYSTEM CHECK -->
+  <section id="tab-check" class="hidden">
+    <div class="card">
+      <h2>System check (smoke test)</h2>
+      <p class="muted">Tests every installed piece one by one. <b>Quick</b>: tools, packages, encoders, overlays, SFX, audio, API keys, footage search (~1 min, free).
+        <b>Full</b>: also HyperFrames, CLIP on the Apple GPU, Gemini vision, an ai33 voice sample, real clip downloads and a mini dry-run video (~3-5 min, a few cents of credits).
+        When something fails, press <b>Copy report</b> and paste it to Claude.</p>
+      <div style="display:flex;gap:10px;margin:12px 0">
+        <button class="btn" id="diagQuick">Run quick check</button>
+        <button class="btn ghost" id="diagFull">Run full check</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="diagCopy">Copy report</button>
+        <a class="btn ghost" href="/api/diagnostics/report.txt" style="text-decoration:none">Download report</a>
+      </div>
+      <div id="diagSummary" class="muted"></div>
+      <table id="diagTable" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:14px"></table>
+    </div>
+    <div class="card"><h2>Report</h2><pre id="diagReport">No report yet.</pre></div>
   </section>
 </main>
 <div id="toast"></div>
@@ -158,6 +180,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("hidden", s.id !== "tab-" + b.dataset.tab));
   if (b.dataset.tab === "jobs") loadJobs();
   if (b.dataset.tab === "voices") renderVoices();
+  if (b.dataset.tab === "check") pollDiag();
 });
 
 async function loadStatus() {
@@ -263,6 +286,11 @@ async function refreshJob() {
 }
 $("#resumeBtn").onclick = async () => { await api(`/api/jobs/${CUR_JOB}/resume`, {from_step: $("#resumeSel").value}); toast("Re-running from " + $("#resumeSel").value); };
 $("#openBtn").onclick = () => api(`/api/open/${CUR_JOB}`, {});
+$("#copyLog").onclick = async () => {
+  const d = await api("/api/jobs/" + CUR_JOB);
+  const t = `WarStudio v${STATUS.version} | video ${d.id} | state ${d.status.state} | step ${d.status.step || "-"}\nerror: ${d.status.error || "-"}\n\n` + (d.status.log || []).join("\n");
+  try { await navigator.clipboard.writeText(t); toast("Log copied — paste it to Claude"); } catch { toast("Copy failed; select the log text manually"); }
+};
 setInterval(() => { if (!$("#tab-jobs").classList.contains("hidden")) { loadJobs(); refreshJob(); } }, 2500);
 
 $("#saveKeys").onclick = async () => {
@@ -290,6 +318,38 @@ $("#updBtn").onclick = async () => {
     else if (d.behind > 0) { b.dataset.ready = 1; b.innerHTML = `Install update <span class="badge">${d.behind}</span>`; toast(d.changes.join("\n") || "Update available", 7000); }
     else { toast("WarStudio is up to date"); b.textContent = "Up to date"; setTimeout(() => b.textContent = "Check for update", 3000); }
   } finally { b.disabled = false; }
+};
+
+const DCOL = {ok: "var(--green)", warn: "var(--yel)", fail: "var(--red)", running: "var(--muted)"};
+const DTXT = {ok: "PASS", warn: "WARN", fail: "FAIL", running: "…"};
+let diagTimer = null;
+async function pollDiag() {
+  const d = await api("/api/diagnostics");
+  const rs = d.results || [];
+  $("#diagTable").innerHTML = rs.map(r => `<tr style="border-bottom:1px solid var(--line)">
+    <td style="padding:6px 8px;color:var(--muted);width:90px">${r.group}</td>
+    <td style="padding:6px 8px;width:260px">${r.name}</td>
+    <td style="padding:6px 8px;font-weight:700;color:${DCOL[r.status]};width:60px">${DTXT[r.status]}</td>
+    <td style="padding:6px 8px;color:var(--muted)">${(r.detail || "").replace(/</g, "&lt;")}</td></tr>`).join("");
+  const c = s => rs.filter(r => r.status === s).length;
+  $("#diagSummary").textContent = d.running ? `Running ${d.full ? "full" : "quick"} check… ${rs.length} checks so far` :
+    (rs.length ? `${c("ok")} pass · ${c("warn")} warn · ${c("fail")} fail` : "");
+  if (d.report) $("#diagReport").textContent = d.report;
+  $("#diagQuick").disabled = $("#diagFull").disabled = d.running;
+  clearTimeout(diagTimer);
+  if (d.running) diagTimer = setTimeout(pollDiag, 1200);
+}
+async function startDiag(full) {
+  if (full && !confirm("Full check uses a few cents of API credits (ai33 sample, Gemini, footage downloads). Continue?")) return;
+  try { await api("/api/diagnostics", {full}); $("#diagReport").textContent = "Running…"; setTimeout(pollDiag, 400); }
+  catch (e) { toast(e.message, 5000); }
+}
+$("#diagQuick").onclick = () => startDiag(false);
+$("#diagFull").onclick = () => startDiag(true);
+$("#diagCopy").onclick = async () => {
+  const t = $("#diagReport").textContent;
+  try { await navigator.clipboard.writeText(t); toast("Report copied — paste it to Claude"); }
+  catch { const r = document.createRange(); r.selectNode($("#diagReport")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selected — press Cmd+C"); }
 };
 
 (async () => { await loadStatus(); await loadVoices(false); })();

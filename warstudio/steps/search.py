@@ -46,7 +46,7 @@ def _thumb(v):
 
 def search_dvids(q, key, n):
     d = _cached_get("dvids", "https://api.dvidshub.net/search",
-                    {"api_key": key, "type": "video", "q": q, "max_results": n, "sort": "score"})
+                    {"api_key": key, "type": "video", "q": q, "max_results": n})
     out = []
     for r in d.get("results") or []:
         rid = str(r.get("id") or "")

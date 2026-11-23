@@ -15,7 +15,11 @@ STEPS = ["voice", "beats", "specs", "search", "rank", "fetch", "render", "qc"]
 
 def slugify(title):
     s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50] or "video"
-    return f"{datetime.now():%Y%m%d-%H%M}-{s}"
+    base = f"{datetime.now():%Y%m%d-%H%M%S}-{s}"
+    name, n = base, 2
+    while (PROJECTS_DIR / name).exists():
+        name, n = f"{base}-{n}", n + 1
+    return name
 
 
 def create_project(title, script, voice_id, style_id, dummy=False):

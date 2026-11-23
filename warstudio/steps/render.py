@@ -98,14 +98,15 @@ def run_step(proj, settings, style, log, use_hf=True):
             run(cmd, timeout=600)
         except RuntimeError as e:
             if enc != "libx264":
-                log(f"segment {bid}: {enc} failed, retrying with libx264")
-                enc = "libx264"
-                run(segment_cmd(src, frames, fps, style, spec.get(b["id"], {}).get("footage_class", "real"),
-                                rendered.get(bid), out, enc), timeout=600)
-            else:
-                raise
+                log(f"segment {bid}: {enc} failed ({str(e)[-160:]}); switching to libx264 and re-rendering all segments")
+                from ..config import save_settings
+                save_settings({"encoder": "libx264"})
+                for p in segdir.glob("seg_*.mp4"):
+                    p.unlink()
+                return run_step(proj, dict(settings, encoder="libx264"), style, log, use_hf=use_hf)
+            raise
         if i % 10 == 0 or i == len(beats) - 1:
-            log(f"render segment {i + 1}/{len(beats)}", progress=(i + 1) / len(beats))
+            log(f"render segment {i + 1}/{len(beats)} ({enc})", progress=(i + 1) / len(beats))
 
     lst = proj / "segments.txt"
     lst.write_text("".join(f"file '{p.resolve()}'\n" for p in seg_files))

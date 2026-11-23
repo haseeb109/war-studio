@@ -19,6 +19,7 @@ Then double-click **`WarStudio.command`** (or `uv run python run.py gui`). The G
 3. **Create** tab: title, script, voice, style → *Start production*.
 4. **Videos** tab: live progress per step, log, final video, contact sheet. *Re-run from step* redoes only what you need.
 5. **Check for update** (top right): pulls the latest version from GitHub and restarts. One click.
+6. **System Check** tab: tests every installed piece one by one and gives a report. **Quick** (~1 min, free) or **Full** (~3-5 min, a few cents: HyperFrames, CLIP on the Apple GPU, Gemini, an ai33 sample, real clip downloads, a mini dry-run video). When something breaks, press **Copy report** and paste it to Claude. A failed video also has a **Copy log** button.
 
 Tip: tick **Dry run** for a first test: silent voice and no AI credits, but real footage search, ranking and render.
 
@@ -47,6 +48,8 @@ One key per service. Searches are cached in `data/search_cache`, so repeated que
 | 6 | fetch | Downloads only beat length + 1 s of each winner, normalized to 1080p30, into `library/raw/` (kept for the future library phase) | `fetched.json` |
 | 7 | render | Per beat: slow drift, footage-class grade (FLIR = mono/contrast/noise), overlay baked in, exact frame count from the timeline. Stream-copy join. Voice + SFX + music mix, two-pass loudnorm | `final.mp4` |
 | 8 | qc | Contact sheet, footage log (source URL + offset per shot), A/V drift and loudness check | `qc.json`, `contact_sheet.jpg`, `footage_log.csv` |
+
+Same check from Terminal: `uv run python run.py doctor` (add `--full` for the deep version). Report: `data/diagnostics/latest.txt`.
 
 CLI: `uv run python run.py new "Title" script.txt --voice elevenlabs_nPczCjzI2devNBz1zQrb [--dummy]` and `uv run python run.py resume projects/<name> --from rank`.
 
