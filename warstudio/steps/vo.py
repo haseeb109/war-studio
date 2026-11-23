@@ -63,7 +63,8 @@ def run_step(proj, keys, settings, voice_id, log, dummy=False):
                 raise RuntimeError("AI33_API_KEY missing (Settings tab)")
             credits = ai33.tts_many(keys["AI33_API_KEY"], items, voice_id, settings.get("tts_model"),
                                     int(settings.get("tts_concurrency", 4)),
-                                    on_progress=lambda d, n: log(f"voice {d}/{n}", progress=d / max(n, 1)))
+                                    on_progress=lambda d, n: log(f"voice {d}/{n}", progress=d / max(n, 1)),
+                                    state_file=str(vdir / "pending_tasks.json"), log=log)
     # Decode every sentence to PCM and join sample-exactly. (ffmpeg's concat demuxer drops each mp3's
     # encoder padding, which made vo.wav drift ahead of the timeline by ~35 ms per sentence.)
     import numpy as np
