@@ -40,7 +40,7 @@ DEFAULT_SETTINGS = {
     "custom_model": "",
     "brain_price_in_per_m": 0.30,
     "brain_price_out_per_m": 1.20,
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "auto",
     "tts_model": "eleven_multilingual_v2",
     "tts_concurrency": 4,
     "clip_model": "ViT-B-32",

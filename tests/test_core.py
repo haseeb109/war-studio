@@ -180,3 +180,40 @@ def test_connect_brain_and_footage(monkeypatch):
     assert not ok and "401" in msg and "Invalid API key" in msg
     ok, msg = connect.test("PIXABAY_API_KEY", "")
     assert not ok and "empty" in msg
+
+
+def test_gemini_model_auto_pick_and_404_switch(monkeypatch, tmp_path):
+    from warstudio import llm
+    from warstudio.steps import rank
+    llm._GEMINI_MODELS.clear(); llm._GONE.clear()
+    names = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash", "gemini-3-flash-preview-09", "gemini-3-pro",
+             "gemini-2.5-flash-image", "gemini-3-flash-tts"]
+    assert llm.pick_flash_model(names) == "gemini-3-flash"
+    assert llm.pick_flash_model(names + ["gemini-flash-latest"]) == "gemini-flash-latest"
+    llm._GEMINI_MODELS["k"] = names
+    assert llm.resolve_gemini_model("k", "gemini-2.5-flash") == "gemini-2.5-flash"
+
+    class R:
+        def __init__(self, code, data):
+            self.status_code, self._d, self.text = code, data, json.dumps(data)
+
+        def json(self):
+            return self._d
+    calls = []
+
+    def post(url, json=None, timeout=None):
+        calls.append(url)
+        if "gemini-2.5-flash:" in url:
+            return R(404, {"error": {"code": 404, "message": "This model models/gemini-2.5-flash is no longer available to new users."}})
+        return R(200, {"candidates": [{"content": {"parts": [{"text": '{"scores": [3, 9], "best": 2}'}]}}]})
+    monkeypatch.setattr(llm.httpx, "post", post)
+    img = tmp_path / "c.jpg"
+    from PIL import Image
+    Image.new("RGB", (10, 10)).save(img)
+    with pytest.raises(llm.ModelGone) as e:
+        llm.gemini_pick("k", "gemini-2.5-flash", img, "p")
+    assert "no longer available" in str(e.value) and "\n" not in str(e.value)
+    assert llm.resolve_gemini_model("k", "gemini-2.5-flash") == "gemini-3-flash"
+    res, _ = llm.gemini_pick("k", "gemini-3-flash", img, "p")
+    assert res["best"] == 2
+    llm._GEMINI_MODELS.clear(); llm._GONE.clear()

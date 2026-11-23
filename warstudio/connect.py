@@ -75,16 +75,40 @@ def test_ai33(key):
 def test_gemini(key):
     if not key:
         return False, "GEMINI_API_KEY is empty"
-    r = _get("https://generativelanguage.googleapis.com/v1beta/models", params={"key": key, "pageSize": 200})
-    if r.status_code >= 400:
-        return False, "Gemini: " + _http_msg(r)
-    names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
-             if "generateContent" in (m.get("supportedGenerationMethods") or [])]
-    model = load_settings().get("gemini_model")
-    if model not in names:
-        flash = [n for n in names if "flash" in n and "image" not in n and "tts" not in n][:6]
-        return False, f"key OK, but model '{model}' is not available. Set gemini_model to one of: {', '.join(flash)}"
-    return True, f"key OK · model {model} available"
+    from .llm import _GEMINI_MODELS, resolve_gemini_model, gemini_pick
+    _GEMINI_MODELS.pop(key, None)
+    wanted = load_settings().get("gemini_model", "auto")
+    try:
+        model = resolve_gemini_model(key, wanted)
+    except Exception as e:
+        return False, str(e)[:220]
+    import tempfile
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d:
+        img = f"{d}/t.jpg"
+        Image.new("RGB", (256, 144), (255, 196, 0)).save(img)
+        from .llm import ModelGone
+        tried = []
+        while True:
+            try:
+                res, usage = gemini_pick(key, model, img, 'What color is this image? Return JSON {"color": "<one word>"}')
+                break
+            except ModelGone:
+                tried.append(model)
+                try:
+                    model = resolve_gemini_model(key, "auto")
+                except Exception as e:
+                    return False, f"no working flash model ({', '.join(tried)} gave 404): {str(e)[:120]}"
+            except Exception as e:
+                return False, f"model {model}: {str(e)[:200]}"
+    if tried:
+        wanted = "auto"
+        from .config import save_settings
+        save_settings({"gemini_model": "auto"})
+    note = "" if wanted in ("auto", model) else f" ('{wanted}' not available, using this instead)"
+    if tried:
+        note += f" (retired for this key: {', '.join(tried)})"
+    return True, f"key OK · rerank model {model}{note} · test answer: {res.get('color', res)}"
 
 
 def test_pexels(key):

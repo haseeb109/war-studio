@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from ..llm import gemini_pick
+from ..llm import gemini_pick, resolve_gemini_model, ModelGone
 from ..util import download, read_json, write_json
 
 _CLIP = {}
@@ -22,6 +22,10 @@ def _clip(settings):
     if "model" not in _CLIP:
         import os
         os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+        os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+        import warnings
+        warnings.filterwarnings("ignore", message=".*unauthenticated requests to the HF Hub.*")
         import open_clip
         import torch
         dev = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,7 +104,16 @@ def run_step(proj, keys, settings, style, log):
     k = int(settings.get("rerank_top_k", 5))
     cool = style["footage"]["same_source_cooldown_seconds"]
     gem = keys.get("GEMINI_API_KEY")
-    log(f"ranking with CLIP{' + Gemini rerank' if gem else ' only (no Gemini key)'}")
+    gmodel = None
+    if gem:
+        try:
+            gmodel = resolve_gemini_model(gem, settings.get("gemini_model", "auto"))
+            if settings.get("gemini_model", "auto") not in ("auto", gmodel):
+                log(f"Gemini model '{settings.get('gemini_model')}' is not available for this key; using {gmodel}")
+        except Exception as e:
+            log(f"Gemini unavailable ({str(e)[:160]}); ranking with CLIP only")
+            gem = None
+    log(f"ranking with CLIP{f' + Gemini rerank ({gmodel})' if gem else ' only (no Gemini key)'}")
     recent = []  # (time, source_key)
     gem_fail = 0
     for b in beats:
@@ -142,7 +155,16 @@ def run_step(proj, keys, settings, style, log):
         if gem and len(top) > 1:
             col = make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg")
             try:
-                res, _ = gemini_pick(gem, settings["gemini_model"], col, _prompt(b, sp, len(top)))
+                try:
+                    res, _ = gemini_pick(gem, gmodel, col, _prompt(b, sp, len(top)))
+                except ModelGone as gone:
+                    new = resolve_gemini_model(gem, "auto")
+                    log(f"Gemini model {gmodel} is not available ({str(gone)[-120:]}); switching to {new}")
+                    gmodel = new
+                    if settings.get("gemini_model", "auto") != "auto":
+                        from ..config import save_settings
+                        save_settings({"gemini_model": "auto"})
+                    res, _ = gemini_pick(gem, gmodel, col, _prompt(b, sp, len(top)))
                 scores = res.get("scores") or []
                 best = int(res.get("best") or (scores.index(max(scores)) + 1 if scores else 1))
                 if 1 <= best <= len(top):

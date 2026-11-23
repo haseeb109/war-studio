@@ -281,19 +281,12 @@ def chk_brain():
 
 
 def chk_gemini():
-    keys, s = load_keys(), load_settings()
-    key = keys.get("GEMINI_API_KEY")
+    from .connect import test_gemini
+    key = load_keys().get("GEMINI_API_KEY")
     if not key:
         return "warn", "GEMINI_API_KEY not set: CLIP top-1 picks clips (no rerank)"
-    r = _http_get("https://generativelanguage.googleapis.com/v1beta/models", params={"key": key, "pageSize": 200})
-    if r.status_code >= 400:
-        return "fail", f"Gemini key error HTTP {r.status_code}: {r.text[:200]}"
-    names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
-             if "generateContent" in (m.get("supportedGenerationMethods") or [])]
-    flash = [n for n in names if "flash" in n and "image" not in n and "tts" not in n]
-    if s["gemini_model"] not in names:
-        return "fail", f"model '{s['gemini_model']}' not available for this key. Set gemini_model in Settings to one of: {', '.join(flash[:8])}"
-    return "ok", f"key OK, model {s['gemini_model']} available"
+    ok, msg = test_gemini(key)
+    return ("ok" if ok else "fail"), msg
 
 
 def chk_gemini_vision(c):
@@ -305,7 +298,8 @@ def chk_gemini_vision(c):
         from .llm import gemini_pick
         img = c.tmp / "g.jpg"
         Image.new("RGB", (512, 288), (255, 196, 0)).save(img)
-        res, usage = gemini_pick(keys["GEMINI_API_KEY"], s["gemini_model"], img,
+        from .llm import resolve_gemini_model
+        res, usage = gemini_pick(keys["GEMINI_API_KEY"], resolve_gemini_model(keys["GEMINI_API_KEY"], s.get("gemini_model", "auto")), img,
                                  'What is the main color of this image? Return JSON {"color": "<word>"}')
         return "ok", f"vision call OK: {res}, tokens {usage.get('totalTokenCount', '?')}"
     return f
