@@ -225,7 +225,6 @@ def run_step(proj, keys, settings, style, log):
 
     def one(sp):
         bid = str(sp["id"])
-        n_q = int(n * 1.5) if sp.get("hook") else n      # hook beats: a wider pool to pick the strongest shot
         cands, seen = [], set()
         queries = list(sp["queries"])
         tiers = list(sp.get("tiers") or (["exact"] + ["category"] * (len(queries) - 1)))
@@ -239,7 +238,7 @@ def run_step(proj, keys, settings, style, log):
                 if src in down or src not in active:
                     continue
                 try:
-                    res = call_source(src, q, keys, n_q, settings)
+                    res = call_source(src, q, keys, n, settings)
                     with lock:
                         z = zero.setdefault(src, [0, 0])
                         z[0] += 1

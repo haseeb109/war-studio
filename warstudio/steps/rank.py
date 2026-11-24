@@ -181,16 +181,10 @@ def run_step(proj, keys, settings, style, log):
                 if scene:
                     scene_picks.setdefault(scene, []).append(p)
             continue
-        hook = bool(sp.get("hook"))
-        # cooldown only blocks repeats across DIFFERENT scenes; inside one scene a clip may come back.
-        # Hook (first minute): every shot is a new clip - no repeats at all.
-        blocked = {sk for t, sk, scn in recent
-                   if b["start"] - t < cool and (hook or not (scene and scn == scene))}
+        # cooldown only blocks repeats across DIFFERENT scenes; inside one scene a clip may come back
+        blocked = {sk for t, sk, scn in recent if b["start"] - t < cool and not (scene and scn == scene)}
         cl = [dict(c) for c in cands.get(bid, []) if f"{c['source']}:{c['id']}" not in blocked]
-        if not cl and hook:      # nothing new left: fall back to the normal in-scene rule
-            blocked = {sk for t, sk, scn in recent if b["start"] - t < cool and not (scene and scn == scene)}
-            cl = [dict(c) for c in cands.get(bid, []) if f"{c['source']}:{c['id']}" not in blocked]
-        if scene and scene_picks.get(scene) and not hook:
+        if scene and scene_picks.get(scene):
             have = {f"{c['source']}:{c['id']}" for c in cl}
             uses = {}
             for p in scene_picks[scene]:
@@ -226,7 +220,7 @@ def run_step(proj, keys, settings, style, log):
                 s -= 0.05
             c["clip_score_raw"] = round(s, 4)
             c["clip_score"] = round(adjusted_score(c), 4)
-        top = diverse_top(cl, max(k, 8) if hook else k)     # hook: the reranker sees 8 instead of 5
+        top = diverse_top(cl, k)
         winner, gscore, scores, by = top[0], None, None, None
         if rr.active and len(top) > 1:
             res, by = rr.pick(lambda tile: make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg", tile),

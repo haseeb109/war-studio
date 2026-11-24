@@ -66,23 +66,17 @@ def detect(text):
 def plan(beats, specs, style):
     """Choose at most one overlay per beat, respecting the minimum gap. Returns {beat_id: overlay}."""
     oc = style["overlays"]
-    hook_gap = float(style.get("pacing", {}).get("hook_overlay_min_gap_seconds", 0.0))
     spec_by_id = {s["id"]: s for s in specs}
     out, last_end, seen_labels = {}, -99.0, set()
     for b in beats:
-        sp = spec_by_id.get(b["id"], {})
-        hook = bool(b.get("hook") or sp.get("hook"))
-        if b["start"] - last_end < (hook_gap if hook else oc["min_gap_seconds"]):
+        if b["start"] - last_end < oc["min_gap_seconds"]:
             continue
         ov = detect(b["text"])
         if not ov:
-            lab = (sp.get("label") or "").strip()
+            lab = (spec_by_id.get(b["id"], {}).get("label") or "").strip()
             if lab and lab.lower() not in seen_labels and len(lab) <= 32:
                 seen_labels.add(lab.lower())
                 ov = {"kind": "label", "line1": lab, "line2": ""}
-        if not ov and hook and (sp.get("hook_text") or "").strip():
-            # first minute: tactical HUD caption that types itself in (bottom-left)
-            ov = {"kind": "hook", "line1": sp["hook_text"].strip()[:32], "line2": ""}
         if ov:
             dur = min(b["end"] - b["start"], oc["max_hold_seconds"])
             ov["duration"] = round(max(0.8, dur), 3)
@@ -110,17 +104,7 @@ def render_png(ov, style, out_png):
     W, H = style["canvas"]["width"], style["canvas"]["height"]
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    if ov["kind"] == "hook":
-        f = _font(46)
-        tw = d.textlength(ov["line1"], font=f)
-        x, y, h = 70, H - 230, 84
-        d.rectangle([x, y, x + tw + 96, y + h], fill=(11, 11, 11, 200))
-        d.rectangle([x, y, x + 10, y + h], fill=oc["box_color"])
-        for cx, cy, sx, sy in ((x + tw + 96, y, -1, 1), (x + tw + 96, y + h, -1, -1)):
-            d.line([cx, cy, cx + 22 * sx, cy], fill=oc["box_color"], width=4)
-            d.line([cx, cy, cx, cy + 22 * sy], fill=oc["box_color"], width=4)
-        d.text((x + 38, y + 16), ov["line1"], font=f, fill=(255, 255, 255, 255))
-    elif ov["kind"] == "label":
+    if ov["kind"] == "label":
         f = _font(54)
         tw = d.textlength(ov["line1"], font=f)
         x, y = 70, 70

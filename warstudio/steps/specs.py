@@ -42,11 +42,6 @@ def build_queries(exact, substitute, category):
     return qs, tiers
 
 
-def clean_hook_text(t):
-    t = re.sub(r"\s+", " ", str(t or "")).strip().strip('"').upper()
-    return t if 2 <= len(t) <= 32 else ""
-
-
 def fallback_spec(b):
     words = [w for w in re.findall(r"[A-Za-z0-9\-]+", b["text"]) if w.lower() not in STOP]
     caps = [w for w in words if any(c.isdigit() for c in w) or w[:1].isupper()]
@@ -89,8 +84,7 @@ def validate(items, ids):
                          "substitute": str(it.get("substitute") or "").strip()[:80], "category": _clean_q(cat[0]),
                          "scene": str(it.get("scene") or "").strip().lower()[:60], "footage_class": fc,
                          "entity": str(it.get("entity") or "").strip(), "avoid": list(it.get("avoid") or [])[:3],
-                         "label": str(it.get("label") or "").strip()[:32], "sfx": sfx,
-                         "hook_text": clean_hook_text(it.get("hook_text"))}
+                         "label": str(it.get("label") or "").strip()[:32], "sfx": sfx}
     missing = ids - set(out)
     if missing:
         errors.append(f"missing beats: {sorted(missing)[:20]}")
@@ -126,8 +120,7 @@ def run_step(proj, keys, settings, log, dummy=False):
             return {b["id"]: fallback_spec(b) for b in chunk}
         ctx = " ".join(b["text"] for b in beats[max(0, c0 - 6):c0])
         user = (f"VIDEO TITLE: {title}\nPREVIOUS CONTEXT: {ctx}\n\nBEATS:\n" +
-                "\n".join(json.dumps({"id": b["id"], "text": b["text"], **({"hook": True} if b.get("hook") else {})},
-                                      ensure_ascii=False) for b in chunk))
+                "\n".join(json.dumps({"id": b["id"], "text": b["text"]}, ensure_ascii=False) for b in chunk))
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         got = {}
         for attempt in range(2):
@@ -155,11 +148,6 @@ def run_step(proj, keys, settings, log, dummy=False):
     with ThreadPoolExecutor(3) as ex:
         for part in ex.map(do_chunk, range(0, len(beats), CHUNK)):
             specs.update(part)
-    for b in beats:                       # hook captions only inside the hook
-        if specs.get(b["id"]):
-            specs[b["id"]]["hook"] = bool(b.get("hook"))
-            if not b.get("hook"):
-                specs[b["id"]]["hook_text"] = ""
     result = [specs[b["id"]] for b in beats]
     write_json(out_path, result)
     cost = (usage_tot["prompt_tokens"] / 1e6 * num(settings.get("brain_price_in_per_m"), 0.3) +

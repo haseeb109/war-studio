@@ -43,7 +43,6 @@ DEFAULT_SETTINGS = {
     "gemini_model": "auto",
     "reranker": "auto",          # auto = Groq if its key is set, else Gemini, else CLIP only; or groq / gemini / clip
     "groq_vision_model": "auto",
-    "sfx": False,                # automatic sound effects (off for now; SFX added by hand in Review still play)
     "segment_check": "auto",     # auto = pixels + Apple Vision text/face check on Mac | vlm = also the vision model | off
     "tts_model": "eleven_multilingual_v2",
     "tts_concurrency": 4,

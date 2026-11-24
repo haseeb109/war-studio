@@ -56,22 +56,9 @@ STEP 6 — GUARDS
 - sfx: zero or more from [launch, explosion, flyby, gunfire, flares, radar, radio_static, alarm, impact], only
   when the beat describes that sound-making event happening now.
 
-STEP 7 — THE HOOK (beats marked "hook": true = the first minute)
-The first minute decides if the viewer stays. Hook beats are short (about 2 s each), so:
-- Every hook beat gets its OWN shot: a different visual from the beat before it (another angle, another
-  moment, another element of the same scene). Prefer the exact system and the most dramatic frame
-  (takeoff, launch, afterburner, close cockpit, sensor feed) over a calm wide shot.
-- hook_text: a short on-screen tactical caption (2-5 words, UPPERCASE, max 28 characters) that tells the
-  viewer what they are looking at or what is at stake, written like a military HUD / intel tag:
-  "TARGET: MOBILE CONVOY", "2 x F-15E STRIKE EAGLE", "MISSION: ONE PASS ONLY", "STATUS: TRACKING",
-  "LOCATION: DRY RIVERBED". Use ONLY facts from the script, never invent units, names or outcomes.
-  Do not repeat numbers with units (feet, miles, knots, times) - those get their own callout box.
-  Give hook_text to about 2 out of 3 hook beats; leave "" where the picture speaks for itself.
-- Not a hook beat: hook_text is "".
-
 OUTPUT
 Return ONLY JSON:
 {"beats": [{"id": <int>, "visual": "...", "entity": "...", "exact_queries": [...], "substitute": "...",
             "substitute_queries": [...], "category_query": "...", "scene": "...", "footage_class": "...",
-            "avoid": [...], "label": "...", "sfx": [...], "hook_text": "..."}]}
+            "avoid": [...], "label": "...", "sfx": [...]}]}
 One object per input beat, same ids, same order. Every field present.
