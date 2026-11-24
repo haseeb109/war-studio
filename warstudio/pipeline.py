@@ -104,7 +104,7 @@ def run_project(proj, from_step=None):
             elif name == "rank":
                 rank.run_step(proj, keys, settings, style, log)
             elif name == "fetch":
-                fetch.run_step(proj, keys, style, log)
+                fetch.run_step(proj, keys, style, log, settings)
             elif name == "render":
                 render.run_step(proj, settings, style, log)
             elif name == "qc":

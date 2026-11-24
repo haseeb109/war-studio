@@ -39,6 +39,8 @@ def resolve_dvids(pick, key):
 def choose_start(src_dur, need, used_offsets, min_start=0.0):
     if src_dur <= 0:
         return round(max(0.0, min_start), 2)
+    if src_dur > 60:                       # long reels end on credits / end slates / black: keep out of the tail
+        src_dur = max(need + min_start + 0.5, src_dur - min(8.0, src_dur * 0.05))
     lo = max(0.0, min(min_start, src_dur - need - 0.2))
     span = src_dur - lo
     base = max(lo, min(src_dur - need - 0.2, lo + span * 0.3))
@@ -72,7 +74,25 @@ def fetch_one(pick, start, need, out, W, H, fps):
     return out
 
 
-def run_step(proj, keys, style, log):
+RETRY_OFFSETS = 2      # other moments of the same long video to try when the cut has text/interview/etc.
+
+
+def _long(p, need):
+    d = num(p.get("duration"))
+    return d >= max(need * 3, 30) or (p.get("source") in ("dvids", "commons") and d > 60)
+
+
+def run_step(proj, keys, style, log, settings=None):
+    from ..cleancheck import check_segment, vision_available
+    settings = settings or {}
+    mode = str(settings.get("segment_check", "auto")).lower()
+    rr = None
+    if mode == "vlm":
+        from ..rerank import Reranker
+        rr = Reranker(keys, settings, log)
+    if mode != "off":
+        log(f"segment check: {mode} (" + ("Apple Vision text+face" if vision_available() else "pixels only") +
+            (f" + {rr.active}" if rr and rr.active else "") + ")")
     proj = Path(proj)
     out_path = proj / "fetched.json"
     fetched = read_json(out_path, {}) or {}
@@ -100,8 +120,26 @@ def run_step(proj, keys, style, log):
         if p["source"] == "dvids" and not p.get("video_url"):
             resolve_dvids(p, keys.get("DVIDS_API_KEY"))
         k = f"{p['source']}:{p['id']}"
+        forced = p.get("forced_start") is not None
+        attempts = 1 if forced or mode == "off" or not _long(p, need) else 1 + RETRY_OFFSETS
+        best = None
+        for a in range(attempts):
+            res = cut_one(p, k, need, forced)
+            chk = {"problems": [], "crop_bottom": 0.0}
+            if not forced and mode != "off":
+                chk = check_segment(res["file"], res["length"], mode, rr)
+            res.update(problems=chk.get("problems", []), crop_bottom=chk.get("crop_bottom", 0.0))
+            if not res["problems"]:
+                if a:
+                    log(f"beat {bid}: moved to a clean moment of the same video (try {a + 1})")
+                return res
+            if best is None or len(res["problems"]) < len(best["problems"]):
+                best = res
+        return best
+
+    def cut_one(p, k, need, forced):
         with lock:
-            if p.get("forced_start") is not None:
+            if forced:
                 start = round(num(p["forced_start"]), 2)
             else:
                 start = choose_start(num(p.get("duration")), need, used.setdefault(k, []), num(p.get("min_start")))
@@ -116,7 +154,7 @@ def run_step(proj, keys, style, log):
             try:
                 fetch_one(p, start, need, out, W, H, fps)
             except Exception:
-                if start > 0 and p.get("forced_start") is None:   # some sources can't seek: try from 0
+                if start > 0 and not forced:                       # some sources can't seek: try from 0
                     start = 0.0
                     out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_0_{int(need * 100)}.mp4"
                     fetch_one(p, start, need, out, W, H, fps)
@@ -126,20 +164,32 @@ def run_step(proj, keys, style, log):
                 **{x: p.get(x, "") for x in ("source", "id", "page_url", "credit", "title", "license")}}
 
     def work(job):
-        """The pick first; if it can't be downloaded, the next ranked alternates (up to 3 tries)."""
+        """The pick first; if it can't be downloaded or every tried moment is unclean (text, interview, black...),
+        the next ranked alternates (up to 4 clips). If none is clean, the least-bad one is used and flagged."""
         bid, p, need = job
         tries = [p] + [a for a in (p.get("alternates") or [])
                        if (a.get("source"), a.get("id")) != (p.get("source"), p.get("id"))]
-        errors = []
-        for n, cand in enumerate(tries[:3]):
+        errors, best, best_n = [], None, 0
+        for n, cand in enumerate(tries[:4]):
             try:
                 res = try_one(bid, cand, need)
-                if n:
-                    log(f"beat {bid}: first clip failed ({errors[0][:80]}); used ranked alternate #{n + 1}")
-                    switched[bid] = dict(cand, alternates=p.get("alternates") or [])
-                return bid, res
             except Exception as e:
                 errors.append(str(e)[:160])
+                continue
+            if not res.get("problems"):
+                if n:
+                    why = errors[0][:80] if errors else "earlier clips were not clean"
+                    log(f"beat {bid}: used ranked alternate #{n + 1} ({why})")
+                    switched[bid] = dict(cand, alternates=p.get("alternates") or [])
+                return bid, res
+            errors.append("unclean: " + ", ".join(res["problems"]))
+            if best is None or len(res["problems"]) < len(best["problems"]):
+                best, best_n = res, n
+        if best is not None:
+            log(f"beat {bid}: no clean clip found, using the least-bad one ({', '.join(best['problems'])})")
+            if best_n:
+                switched[bid] = dict(tries[best_n], alternates=p.get("alternates") or [])
+            return bid, best
         log(f"beat {bid}: no clip could be downloaded ({' | '.join(errors)[:240]})")
         return bid, None
 
@@ -155,6 +205,10 @@ def run_step(proj, keys, style, log):
     if switched:                                  # keep picks.json in line with what was really used
         picks.update(switched)
         write_json(proj / "picks.json", picks)
+    unclean = [b for b, v in fetched.items() if v and v.get("problems")]
+    cropped = sum(1 for v in fetched.values() if v and v.get("crop_bottom"))
+    if mode != "off":
+        log(f"segment check: {len(unclean)} beat(s) still unclean, {cropped} lower-third(s) zoomed out of frame")
     missing = [b for b, v in fetched.items() if not v]
     if missing:
         log(f"fetch done; {len(missing)} beat(s) without footage (they repeat the previous clip): {', '.join(missing[:12])}")

@@ -43,6 +43,7 @@ DEFAULT_SETTINGS = {
     "gemini_model": "auto",
     "reranker": "auto",          # auto = Groq if its key is set, else Gemini, else CLIP only; or groq / gemini / clip
     "groq_vision_model": "auto",
+    "segment_check": "auto",     # auto = pixels + Apple Vision text/face check on Mac | vlm = also the vision model | off
     "tts_model": "eleven_multilingual_v2",
     "tts_concurrency": 4,
     "clip_model": "ViT-B-32",

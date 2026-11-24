@@ -1,6 +1,6 @@
 [project]
 name = "warstudio"
-version = "0.6.0"
+version = "0.6.1"
 description = "WarStudio: script in, synced military documentary video out."
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
     "pillow",
     "torch",
     "open_clip_torch",
+    "pyobjc-framework-Vision; sys_platform == 'darwin'",
 ]
 
 [dependency-groups]

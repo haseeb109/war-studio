@@ -111,8 +111,27 @@ SCENE_REUSE_BONUS = 0.015  # same scene: reusing a strong clip from another mome
 SCENE_REUSE_MAX = 3        # uses of one clip inside one scene
 
 
+BROLL_WORDS = ("b-roll", "broll", "b roll")
+NOT_BROLL_WORDS = ("package", "interview", "briefing", "press conference", "podcast", "town hall", "news update",
+                   "update", "speech", "remarks", "testimony", "q&a")
+BROLL_BONUS = 0.015
+NOT_BROLL_PENALTY = 0.025
+
+
+def title_adjust(title):
+    """DVIDS (and others) label raw footage 'B-Roll'; 'Package'/'Interview' videos carry narration, lower-thirds
+    and talking heads."""
+    t = f" {(title or '').lower()} "
+    if any(w in t for w in BROLL_WORDS):
+        return BROLL_BONUS
+    if any(f" {w}" in t or f"{w} " in t for w in NOT_BROLL_WORDS):
+        return -NOT_BROLL_PENALTY
+    return 0.0
+
+
 def adjusted_score(c):
     s = c.get("clip_score_raw", c.get("clip_score", 0)) + TIER_BONUS.get(c.get("tier"), 0.0)
+    s += title_adjust(c.get("title"))
     if num(c.get("duration")) > REEL_SECONDS and c.get("tier") != "exact":
         s -= REEL_PENALTY
     if c.get("scene_reuse"):

@@ -142,6 +142,8 @@ def review_data(proj):
             flags.append("low match")
         if spec.get(b["id"], {}).get("fallback") and not (p.get("gemini_score") or 0) >= 6:
             flags.append("generic search")
+        if f.get("problems"):
+            flags.append("unclean: " + ", ".join(f["problems"]))   # text / interview / black left in the cut
         if spec.get(b["id"], {}).get("entity") and p.get("tier") == "category" and not p.get("scene_reuse"):
             flags.append("category clip")     # named system, but only the broad class was found
         alts = p.get("alternates") or []
@@ -486,7 +488,7 @@ def apply(proj, log):
     for bid in dirty:
         (proj / "segments" / f"seg_{int(bid):05d}.mp4").unlink(missing_ok=True)
     t0 = time.time()
-    fetch.run_step(proj, keys, style, log)
+    fetch.run_step(proj, keys, style, log, settings)
     render.run_step(proj, settings, style, log)
     qc.run_step(proj, log)
     rv = _review(proj)

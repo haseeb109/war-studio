@@ -14,13 +14,18 @@ from ..util import read_json, write_json, run, video_encoder, encoder_args
 FALLBACK_COLOR = "0x101418"
 
 
-def segment_cmd(src, frames, fps, style, fclass, ov, out, enc):
+def segment_cmd(src, frames, fps, style, fclass, ov, out, enc, crop_bottom=0.0):
     W, H = style["canvas"]["width"], style["canvas"]["height"]
     dur = frames / fps
     grade = style["grade"].get(fclass, style["grade"]["real"])
     s = style["footage"]["motion"]["drift_scale"] if style["footage"]["motion"].get("drift") else 1.0
+    y = "(ih-oh)/2"
+    if crop_bottom and src:
+        # a lower-third sits in the bottom `crop_bottom` of the clip: zoom in, anchored to the top, so it leaves the frame
+        s = max(s, 1.0 / (1.0 - min(float(crop_bottom), 0.2)))
+        y = "0"
     sw, sh = int(W * s) // 2 * 2, int(H * s) // 2 * 2
-    chain = (f"[0:v]scale={sw}:{sh},crop={W}:{H}:x='(iw-ow)*t/{max(dur, 0.1):.3f}':y='(ih-oh)/2',"
+    chain = (f"[0:v]scale={sw}:{sh},crop={W}:{H}:x='(iw-ow)*t/{max(dur, 0.1):.3f}':y='{y}',"
              f"{grade},tpad=stop_mode=clone:stop_duration={dur:.2f},trim=end_frame={frames},setpts=PTS-STARTPTS,fps={fps}")
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if src:
@@ -93,8 +98,9 @@ def run_step(proj, settings, style, log, use_hf=True):
         seg_files.append(out)
         if out.exists():
             continue
+        crop = (f or {}).get("crop_bottom", 0.0) if f and Path(f["file"]).exists() else 0.0
         cmd = segment_cmd(src, frames, fps, style, spec.get(b["id"], {}).get("footage_class", "real"),
-                          rendered.get(bid), out, enc)
+                          rendered.get(bid), out, enc, crop)
         try:
             run(cmd, timeout=600)
         except RuntimeError as e:

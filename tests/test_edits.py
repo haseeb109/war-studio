@@ -161,7 +161,7 @@ def test_fetch_falls_back_to_alternates(tmp_path, monkeypatch):
     import warstudio.steps.fetch as f
     monkeypatch.setattr(f, "LIBRARY_DIR", tmp_path / "lib")
     good = tmp_path / "good.mp4"
-    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=green:s=320x180:r=25:d=10",
+    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=10",
          "-c:v", "libx264", "-preset", "ultrafast", str(good)])
     proj = tmp_path / "p"
     proj.mkdir()
@@ -181,3 +181,27 @@ def test_fetch_falls_back_to_alternates(tmp_path, monkeypatch):
 def test_duration_and_num():
     from warstudio.util import num
     assert num("N/A") == 0.0 and num(None, 5) == 5 and num("3.5") == 3.5 and num(float("nan")) == 0.0
+
+
+def test_fetch_moves_to_clean_moment_of_long_video(tmp_path, monkeypatch):
+    import warstudio.steps.fetch as f
+    import warstudio.cleancheck as cc
+    monkeypatch.setattr(f, "LIBRARY_DIR", tmp_path / "lib")
+    src = tmp_path / "reel.mp4"
+    run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=120",
+         "-c:v", "libx264", "-preset", "ultrafast", str(src)])
+    proj = tmp_path / "p"
+    proj.mkdir()
+    write_json(proj / "beats.json", [{"id": 0, "sid": 0, "text": "x", "start": 0, "end": 2.0}])
+    write_json(proj / "vo.json", {"total": 2.0, "sentences": []})
+    write_json(proj / "picks.json", {"0": {"source": "dvids", "id": "r1", "video_url": str(src), "duration": 120}})
+    calls = []
+
+    def fake(path, length, mode="auto", reranker=None):
+        calls.append(path)
+        return {"problems": ["talking_head"] if len(calls) == 1 else [], "crop_bottom": 0.0}
+    monkeypatch.setattr(cc, "check_segment", fake)
+    logs = []
+    out = f.run_step(proj, {}, load_style("beyond_military"), lambda m, **k: logs.append(m), {"segment_check": "auto"})
+    assert len(calls) == 2 and out["0"]["problems"] == [] and out["0"]["file"] == calls[1]
+    assert any("clean moment" in m for m in logs)

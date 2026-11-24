@@ -97,3 +97,13 @@ If `npx hyperframes` works and ffmpeg has `libvpx-vp9`, callouts are rendered as
 - Shared clip library with index, dedupe, usage ledger, rerank cache (clips are already being saved to `library/raw/`).
 - Animated 3D maps (map beats currently use aerial/satellite stock footage).
 - Licensing: DVIDS footage is public domain; Wikimedia Commons clips are limited to public domain / CC0 / CC BY (CC BY-SA only if `commons_allow_sharealike` is true); Pexels/Pixabay follow their licenses. `footage_log.csv` records source and license of every shot, and `credits.txt` holds the attribution lines to paste into the YouTube description (required for CC BY clips).
+
+## Clean-footage check (DVIDS and other long reels)
+
+After every cut, WarStudio checks the actual segment (not the search thumbnail):
+
+1. **B-Roll first** - titles with "B-Roll" rank higher; "Package", "Interview", "Briefing", "Press Conference", "Podcast" rank lower.
+2. **Segment check** (`segment_check` setting): `auto` = ffmpeg black detection + blank-card / colour-bar detection + on Mac, Apple Vision text and face detection (built into macOS, free). `vlm` also asks the vision reranker. `off` disables it.
+   Burned-in text, subtitles, title cards, banners or a talking head -> another moment of the same long video is tried (2 more), then the next ranked alternate (up to 4 clips). If nothing is clean, the least-bad clip is used and the Review editor flags it `unclean: ...`.
+3. **Slates, black, end credits** - start after the DVIDS `time_start`, never in the last 5% (max 8 s) of long videos, black/blank/colour-bar cuts rejected.
+4. **Lower-third crop** - a name strip in the bottom ~16% alone is not a rejection: render zooms in from the top so it leaves the frame.
