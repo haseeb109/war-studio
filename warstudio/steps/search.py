@@ -181,7 +181,16 @@ def run_step(proj, keys, settings, style, log):
     specs = read_json(proj / "specs.json")
     n = int(settings.get("candidates_per_query", 12))
     down = set()
-    active = [s for s in SOURCES if source_ready(s, keys, settings)]
+    chosen = [s for s in (settings.get("job_sources") or []) if s in SOURCES]
+    if chosen:
+        # sources picked for this video on the Create page; a picked no-key source counts as switched on
+        settings = dict(settings, **{f"use_{s}": True for s in chosen})
+        active = [s for s in chosen if source_ready(s, keys, settings)]
+        skipped = [s for s in chosen if s not in active]
+        if skipped:
+            log(f"selected source(s) without an API key, skipped: {', '.join(skipped)}")
+    else:
+        active = [s for s in SOURCES if source_ready(s, keys, settings)]
     if not active:
         raise RuntimeError("No footage source available (DVIDS / Pexels / Pixabay keys, or Wikimedia Commons) — check Settings")
     log(f"searching footage on: {', '.join(active)}")

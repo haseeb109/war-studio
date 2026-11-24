@@ -59,3 +59,31 @@ def test_diverse_top_keeps_seats_for_each_source():
     top = rank.diverse_top(c, 5)
     assert len(top) == 5 and sum(1 for t in top if t["source"] == "dvids") == 2
     assert top[0]["clip_score"] == 0.9
+
+
+def test_search_uses_only_sources_picked_for_the_video(tmp_path, monkeypatch):
+    from warstudio.util import write_json
+    write_json(tmp_path / "specs.json", [{"id": 0, "queries": ["f-35 takeoff", "fighter jet"],
+                                          "tiers": ["exact", "category"], "footage_class": "real"}])
+    called = []
+
+    def fake(src, q, keys, n, settings=None):
+        called.append(src)
+        return [{"source": src, "id": f"{src}{q}", "preview_url": "x"}]
+    monkeypatch.setattr(search, "call_source", fake)
+    style = {"footage": {"source_order": ["dvids", "commons", "pexels", "pixabay"]}}
+    keys = {"DVIDS_API_KEY": "d", "PIXABAY_API_KEY": "p"}
+    logs = []
+    out = search.run_step(tmp_path, keys, {"job_sources": ["dvids"]}, style, lambda m, **k: logs.append(m))
+    assert set(called) == {"dvids"} and all(c["source"] == "dvids" for c in out["0"])
+    assert any("searching footage on: dvids" in m for m in logs)
+    # a picked source without a key is reported and skipped
+    called.clear()
+    (tmp_path / "candidates.json").unlink()
+    search.run_step(tmp_path, keys, {"job_sources": ["dvids", "pexels"]}, style, lambda m, **k: logs.append(m))
+    assert set(called) == {"dvids"} and any("skipped: pexels" in m for m in logs)
+    # nothing picked = every available source (commons needs no key)
+    called.clear()
+    (tmp_path / "candidates.json").unlink()
+    search.run_step(tmp_path, keys, {}, style, lambda m, **k: None)
+    assert set(called) == {"dvids", "commons", "pixabay"}

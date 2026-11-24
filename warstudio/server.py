@@ -82,6 +82,7 @@ class NewJob(BaseModel):
     voice_id: str
     style: str = "beyond_military"
     dummy: bool = False
+    sources: list[str] = []          # footage sources for this video only; empty = all available
 
 
 class Resume(BaseModel):
@@ -210,7 +211,16 @@ def voice_preview_file(name: str):
 def new_job(j: NewJob):
     if not j.script.strip():
         raise HTTPException(400, "script is empty")
-    proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy)
+    from .steps.search import SOURCES, source_ready
+    from .config import load_keys, load_settings
+    bad = [s for s in j.sources if s not in SOURCES]
+    if bad:
+        raise HTTPException(400, f"unknown footage source: {', '.join(bad)}")
+    if j.sources:
+        keys, settings = load_keys(), dict(load_settings(), **{f"use_{s}": True for s in j.sources})
+        if not any(source_ready(s, keys, settings) for s in j.sources):
+            raise HTTPException(400, "none of the selected footage sources has an API key — add it in Settings")
+    proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources)
     JOBS.put((proj, None))
     return {"id": proj.name}
 

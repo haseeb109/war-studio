@@ -28,13 +28,13 @@ def slugify(title):
     return name
 
 
-def create_project(title, script, voice_id, style_id, dummy=False):
+def create_project(title, script, voice_id, style_id, dummy=False, sources=None):
     proj = PROJECTS_DIR / slugify(title)
     proj.mkdir(parents=True, exist_ok=True)
     (proj / "title.txt").write_text(title.strip() + "\n", encoding="utf-8")
     (proj / "script.txt").write_text(script.strip() + "\n", encoding="utf-8")
     write_json(proj / "project.json", {"title": title, "voice_id": voice_id, "style": style_id, "dummy": dummy,
-                                       "created": time.time()})
+                                       "sources": list(sources or []), "created": time.time()})
     write_json(proj / "status.json", {"state": "queued", "step": None, "progress": 0, "log": []})
     return proj
 
@@ -100,7 +100,7 @@ def run_project(proj, from_step=None):
             elif name == "specs":
                 specs.run_step(proj, keys, settings, log, dummy=dummy)
             elif name == "search":
-                search.run_step(proj, keys, settings, style, log)
+                search.run_step(proj, keys, dict(settings, job_sources=meta.get("sources") or []), style, log)
             elif name == "rank":
                 rank.run_step(proj, keys, settings, style, log)
             elif name == "fetch":

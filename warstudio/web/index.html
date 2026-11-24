@@ -114,6 +114,13 @@
           <select id="styleSel"></select>
         </div>
       </div>
+      <label>Footage sources for this video</label>
+      <div id="srcBox" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
+        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="dvids" style="width:auto" checked> DVIDS (US military)</label>
+        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="commons" style="width:auto" checked> Wikimedia Commons</label>
+        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="pexels" style="width:auto" checked> Pexels</label>
+        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="pixabay" style="width:auto" checked> Pixabay</label>
+      </div>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="dummy" style="width:auto"> Dry run (silent voice, no AI credits) &mdash; tests footage + render only</label>
       <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
         <button class="btn" id="startBtn">Start production</button>
@@ -365,10 +372,20 @@ $("#script").oninput = () => {
   const s = $("#script").value, w = s.trim() ? s.trim().split(/\s+/).length : 0;
   $("#scriptInfo").textContent = w ? `· ${w} words · ~${(w / 150).toFixed(1)} min · ${s.length} chars (~${Math.round(s.length * 1.1)} ai33 credits)` : "";
 };
+(() => {   // remember the last footage-source choice
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("ws_sources") || "null"); } catch (e) {}
+  document.querySelectorAll(".srcChk").forEach(c => {
+    if (Array.isArray(saved)) c.checked = saved.includes(c.value);
+    c.onchange = () => { try { localStorage.setItem("ws_sources", JSON.stringify([...document.querySelectorAll(".srcChk:checked")].map(x => x.value))); } catch (e) {} };
+  });
+})();
 $("#startBtn").onclick = async () => {
   try {
+    const sources = [...document.querySelectorAll(".srcChk:checked")].map(x => x.value);
+    if (!sources.length) { toast("Pick at least one footage source"); return; }
     $("#startBtn").disabled = true;
-    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked});
+    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources});
     $("#startMsg").textContent = "Queued: " + d.id;
     document.querySelector('nav button[data-tab="jobs"]').click(); await loadJobs(); openJob(d.id);
   } catch (e) { toast(e.message, 6000); } finally { $("#startBtn").disabled = false; }
