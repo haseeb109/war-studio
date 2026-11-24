@@ -93,6 +93,50 @@ def library_stop():
     return library.stop_build()
 
 
+@app.get("/api/library/shots")
+def library_shots(q: str = "", category: str = "", favorites: bool = False, sort: str = "new", offset: int = 0,
+                  limit: int = 60):
+    from . import library
+    return library.list_shots(load_settings(), q, category, favorites, sort, offset, min(limit, 200))
+
+
+def _lib_file(shot_id, field):
+    from . import library
+    r = library.shot_row(load_settings(), shot_id)
+    if not r or not r.get(field) or not Path(r[field]).exists():
+        raise HTTPException(404)
+    return FileResponse(r[field])
+
+
+@app.get("/api/library/thumb/{shot_id}")
+def library_thumb(shot_id: int):
+    return _lib_file(shot_id, "keyframe")
+
+
+@app.get("/api/library/video/{shot_id}")
+def library_video(shot_id: int):
+    return _lib_file(shot_id, "file")
+
+
+class Fav(BaseModel):
+    on: bool = True
+
+
+@app.post("/api/library/shots/{shot_id}/favorite")
+def library_favorite(shot_id: int, f: Fav):
+    from . import library
+    library.set_favorite(load_settings(), shot_id, f.on)
+    return {"ok": True}
+
+
+@app.post("/api/library/shots/{shot_id}/delete")
+def library_delete(shot_id: int):
+    from . import library
+    if not library.delete_shot(load_settings(), shot_id):
+        raise HTTPException(404, "shot not found")
+    return {"ok": True}
+
+
 # ---------- models ----------
 
 class Keys(BaseModel):

@@ -505,6 +505,16 @@ def search(proj, query, n=12):
     keys = load_keys()
     settings = load_settings()
     out, errors = [], []
+    # your own library first: local, instant, already clean
+    try:
+        from .library import LibraryIndex, clip_text_vecs
+        idx = LibraryIndex(settings)
+        if len(idx):
+            v = clip_text_vecs(settings, [query])[0]
+            for c in idx.match(v, "", query, k=n, rotation=False):
+                out.append(dict(c, query=query))
+    except Exception as e:
+        errors.append(f"library: {str(e)[:100]}")
     for src in SOURCES:
         if not source_ready(src, keys, settings):
             continue

@@ -29,6 +29,7 @@ def resolve_dvids(pick, key):
     if not mp4:
         raise RuntimeError("DVIDS asset has no mp4 file")
     pick["video_url"] = mp4[0]["src"]
+    pick["src_height"] = int(num(mp4[0].get("height")))
     if not num(pick.get("duration")):
         pick["duration"] = num(d.get("duration"))
     # DVIDS packages open with slates/titles; time_start is where the real footage begins
@@ -162,7 +163,7 @@ def run_step(proj, keys, style, log, settings=None):
                 else:
                     raise
         return {"file": str(out), "start": start, "length": duration(out),
-                **{x: p.get(x, "") for x in ("source", "id", "page_url", "credit", "title", "license")}}
+                **{x: p.get(x, "") for x in ("source", "id", "page_url", "credit", "title", "license", "src_height")}}
 
     def work(job):
         """The pick first; if it can't be downloaded or every tried moment is unclean (text, interview, black...),

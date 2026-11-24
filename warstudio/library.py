@@ -99,10 +99,45 @@ def _db(settings=None):
       note TEXT, done REAL, PRIMARY KEY(source, src_id));
     CREATE TABLE IF NOT EXISTS uses(shot_id INTEGER, project TEXT, at REAL);
     """)
-    if "phash" not in [r[1] for r in con.execute("PRAGMA table_info(shots)")]:
-        con.execute("ALTER TABLE shots ADD COLUMN phash TEXT")
-        con.commit()
+    cols = [r[1] for r in con.execute("PRAGMA table_info(shots)")]
+    for col, typ in (("phash", "TEXT"), ("favorite", "INTEGER DEFAULT 0"), ("action", "TEXT"),
+                     ("frames", "INTEGER DEFAULT 1"), ("src_height", "INTEGER")):
+        if col not in cols:
+            con.execute(f"ALTER TABLE shots ADD COLUMN {col} {typ}")
+    con.execute("""CREATE TABLE IF NOT EXISTS deleted(phash TEXT, source TEXT, src_id TEXT, src_start REAL,
+                   length REAL, emb BLOB, at REAL)""")
+    con.commit()
     return con
+
+
+# ---------------------------------------------------------------- actions (what happens in the shot)
+ACTIONS = [
+    ("refueling", ["refuel", "tanker", "boom operator", "drogue", "take on fuel", "takes on fuel", "fuel up"]),
+    ("takeoff", ["takeoff", "take off", "takes off", "taking off", "lift off", "lifts off", "liftoff", "catapult"]),
+    ("landing", ["landing", " lands", "touchdown", "touch down", "trap on", "arrested"]),
+    ("launch", ["launch", "leaves the rail", "missile leaves", "fires a missile", "fired a missile", "missile away"]),
+    ("explosion", ["explosion", "explode", "blast", "detonat", "fireball", "turns white", "impact", "bombs fall"]),
+    ("firing", ["firing", "fires", "fired", "gunfire", "howitzer", "salvo", "rounds", "live fire", "shoots"]),
+    ("console", ["screen", "display", "operator", "control station", "operations center", "radar", "console",
+                 "monitor", "feed", "targeting pod", "pod"]),
+    ("hover", ["hover", "rappel", "fast rope", "sling load"]),
+    ("taxi", ["taxi", "flight line", "flightline", "parked", "on the ramp"]),
+    ("sailing", ["underway", "sailing", "at sea", "steaming", "wake", "turns into the wind", "off the coast"]),
+    ("patrol", ["patrol", "convoy", "soldiers move", "advance", "dismount", "trucks", "driving", "road"]),
+    ("loading", ["loading", "munitions", "ordnance", "maintenance", "crew chief", "weapons load"]),
+    ("formation", ["formation", "wingman", "pair of", "two jets", "flight of"]),
+    ("flying", ["flying", "flies", "in flight", "airborne", "banking", "banks", "circling", "orbit", "cruise",
+                "overhead", "climb", "low through", "push their throttles"]),
+]
+ACTION_NAMES = [a for a, _ in ACTIONS]
+
+
+def detect_action(text):
+    t = f" {(text or '').lower()} "
+    for name, words in ACTIONS:
+        if any(w in t for w in words):
+            return name
+    return ""
 
 
 def dhash(path):
@@ -129,12 +164,13 @@ def stats(settings=None):
         cats = {r[0] or "?": r[1] for r in con.execute("SELECT category, COUNT(*) FROM shots GROUP BY category")}
         vids = {r[0]: r[1] for r in con.execute("SELECT status, COUNT(*) FROM videos GROUP BY status")}
         learned = con.execute("SELECT COUNT(*) FROM shots WHERE origin LIKE 'video:%'").fetchone()[0]
-        dupes = con.execute("SELECT COUNT(*) FROM videos WHERE status = 'dupes'").fetchone()[0]
+        favs = con.execute("SELECT COUNT(*) FROM shots WHERE favorite = 1").fetchone()[0]
+        deleted = con.execute("SELECT COUNT(*) FROM deleted").fetchone()[0]
         con.close()
     size = sum(f.stat().st_size for f in lib_dir(settings).glob("*.mp4"))
     free = shutil.disk_usage(lib_dir(settings)).free
     return {"shots": n, "by_category": cats, "videos": vids, "learned_from_videos": learned,
-            "avg_mb_per_shot": round(size / 1e6 / n, 1) if n else 9.0,
+            "avg_mb_per_shot": round(size / 1e6 / n, 1) if n else 9.0, "favorites": favs, "deleted": deleted,
             "gb": round(size / 1e9, 2), "free_gb": round(free / 1e9, 1), "dir": str(lib_dir(settings))}
 
 
@@ -163,6 +199,23 @@ def clip_text_vecs(settings, texts):
         return e.float().cpu().numpy().astype(np.float32)
 
 
+def shot_vec(settings, video, length, keyframe=None):
+    """CLIP vector of a shot = average of 3 frames (25/50/75 %), so moving shots (takeoff, launch) are described
+    by more than one moment. Falls back to the keyframe alone. Returns (vector, frames_used)."""
+    with tempfile.TemporaryDirectory() as td:
+        frames = []
+        for i, f in enumerate((0.25, 0.5, 0.75)):
+            o = Path(td) / f"f{i}.jpg"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(0.0, num(length) * f):.2f}", "-i",
+                            str(video), "-frames:v", "1", "-vf", "scale=448:-2", str(o)], capture_output=True, timeout=120)
+            if o.exists() and o.stat().st_size > 0:
+                frames.append(str(o))
+        if len(frames) >= 2:
+            v = clip_image_vecs(settings, frames).mean(axis=0)
+            return (v / (np.linalg.norm(v) or 1)).astype(np.float32), len(frames)
+    return clip_image_vecs(settings, [keyframe])[0], 1
+
+
 # ---------------------------------------------------------------- matching
 def key_tokens(entity):
     """Tokens that name a system: 'F-15E Strike Eagle' -> {'f-15e', 'f15e', 'strike', 'eagle'};
@@ -184,14 +237,20 @@ def _hay(row):
 
 
 class LibraryIndex:
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, exclude_project=None):
         self.settings = settings or {}
+        n_rot = int(self.settings.get("library_rotation_videos", 5))
         with _DB_LOCK:
             con = _db(settings)
             rows = [dict(r) for r in con.execute("SELECT * FROM shots WHERE emb IS NOT NULL")]
             week = time.time() - 7 * 86400
             recent = {r[0]: r[1] for r in con.execute(
                 "SELECT shot_id, COUNT(DISTINCT project) FROM uses WHERE at > ? GROUP BY shot_id", (week,))}
+            last = [r[0] for r in con.execute(
+                "SELECT project FROM uses WHERE project != ? GROUP BY project ORDER BY MAX(at) DESC LIMIT ?",
+                (exclude_project or "", n_rot))] if n_rot > 0 else []
+            self.rotated = {r[0] for r in con.execute(
+                f"SELECT DISTINCT shot_id FROM uses WHERE project IN ({','.join('?' * len(last))})", last)} if last else set()
             con.close()
         self.rows = [r for r in rows if Path(r["file"]).exists() and Path(r["keyframe"] or "").exists()]
         self.recent = recent
@@ -202,20 +261,27 @@ class LibraryIndex:
     def __len__(self):
         return len(self.rows)
 
-    def match(self, text_vec, entity="", visual="", k=8):
-        """Top-k library shots for one beat. A beat that names a system only gets shots of that system."""
+    def match(self, text_vec, entity="", visual="", k=8, rotation=True):
+        """Top-k library shots for one beat. A beat that names a system only gets shots of that system.
+        Shots used in the last `library_rotation_videos` videos are left out (used only if nothing else fits)."""
         if not self.rows:
             return []
         sims = self.E @ text_vec.astype(np.float32)
         keys = key_tokens(entity)
         words = {w for w in re.findall(r"[a-z0-9\-]+", (visual or "").lower()) if w not in STOP and len(w) > 2}
-        out = []
+        want_action = detect_action(visual)
+        out, held = [], []
         for i, r in enumerate(self.rows):
             hay = self.hay[i]
             ent_ok = bool(keys) and any(t in hay or t in hay.replace("-", "") for t in keys)
             if keys and not ent_ok:
                 continue
             bonus = 0.04 if ent_ok else 0.0
+            act = r.get("action") or detect_action(hay)
+            if want_action and act:
+                bonus += 0.03 if act == want_action else -0.015      # takeoff beat -> takeoff shots first
+            if r.get("favorite"):
+                bonus += 0.01
             bonus += min(0.03, 0.01 * sum(1 for w in words if w in hay))
             q = num(r.get("quality"), 0)
             if q:
@@ -223,12 +289,19 @@ class LibraryIndex:
             pen = min(0.04, 0.01 * self.recent.get(r["id"], 0))          # used in other videos this week
             if time.time() - (r.get("last_used") or 0) < 86400:
                 pen += 0.01
-            out.append((float(sims[i]) + bonus - pen, float(sims[i]), ent_ok, pen, r))
+            item = (float(sims[i]) + bonus - pen, float(sims[i]), ent_ok, pen, r)
+            if rotation and r["id"] in self.rotated:
+                held.append(item)
+            else:
+                out.append(item)
+        if not out and held:            # nothing fresh fits this beat: a recent shot, with a penalty
+            out = [(s_ - 0.05, sim, e, pen + 0.05, r) for s_, sim, e, pen, r in held]
         out.sort(key=lambda x: -x[0])
         res = []
         for score, sim, ent_ok, pen, r in out[:k]:
             res.append({"source": "library", "id": str(r["id"]), "title": r["caption"] or r["title"] or "",
-                        "preview_url": "", "preview_file": r["keyframe"], "video_url": r["file"],
+                        "preview_url": f"/api/library/thumb/{r['id']}", "preview_file": r["keyframe"],
+                        "video_url": r["file"], "action": r.get("action") or "",
                         "duration": r["length"], "tier": "exact" if ent_ok else "category", "query": "library",
                         "credit": r["credit"] or "", "license": r["license"] or "", "page_url": r["page_url"] or "",
                         "lib_score": round(score, 4), "clip_sim": round(sim, 4), "lib_penalty": round(pen, 4)})
@@ -279,16 +352,19 @@ def plan_shots(cuts, dur, min_start=0.0, min_len=3.0, max_len=8.0, pad=0.3):
     return sorted(out, key=lambda s: -s[1])
 
 
+MIN_SOURCE_HEIGHT = 720
+
+
 def pick_files(files):
-    """(proxy, full): a small file to analyse (<= 480p) and the file closest to 1080p to cut from."""
+    """(proxy, full, full_height): a small file to analyse (<= 480p) and the file closest to 1080p to cut from."""
     mp4 = [f for f in files if isinstance(f, dict) and str(f.get("src", "")).split("?")[0].endswith(".mp4")]
     if not mp4:
-        return None, None
+        return None, None, 0
     h = lambda f: int(num(f.get("height")))
     full = sorted(mp4, key=lambda f: (abs(h(f) - 1080), -int(num(f.get("width")))))[0]
     small = [f for f in mp4 if 240 <= h(f) <= 480] or sorted(mp4, key=h)[:1]
     proxy = sorted(small, key=h)[-1] if small and h(small[0]) <= 480 else sorted(mp4, key=h)[0]
-    return proxy["src"], full["src"]
+    return proxy["src"], full["src"], h(full)
 
 
 # ---------------------------------------------------------------- captions
@@ -297,8 +373,21 @@ CAPTION_PROMPT = (
     "Describe it for a footage search index. Name an aircraft/ship/vehicle/weapon type only if you can really "
     "identify it in the image (the hint can be wrong).\n"
     'Return JSON {{"caption": "<one line: subject, action, angle, setting, light>", "entity": "<exact type or empty>", '
+    '"action": "<one of: ' + "|".join(ACTION_NAMES) + '|other>", '
     '"tags": ["5-10 lowercase search words"], "shot": "<wide|medium|close|aerial|cockpit|flir|interior>", '
     '"quality": <1-10 how clean and cinematic>}}')
+
+
+def best_lite_model(key):
+    """Newest stable Gemini Flash-Lite model this key can use (about half the price of Flash), or None."""
+    from .llm import _GONE, gemini_models
+
+    def ver(m):
+        x = re.search(r"gemini-(\d+(?:\.\d+)?)", m)
+        return float(x.group(1)) if x else 0.0
+    lite = [m for m in gemini_models(key) if "flash-lite" in m and m not in _GONE
+            and not any(b in m for b in ("preview", "exp", "tts", "image", "audio", "live"))]
+    return sorted(lite, key=ver, reverse=True)[0] if lite else None
 
 
 class Captioner:
@@ -307,7 +396,15 @@ class Captioner:
         mode = str(settings.get("library_captions", "auto")).lower()
         if mode != "off":
             from .rerank import Reranker
-            rr = Reranker(keys, settings, log)
+            s = dict(settings)
+            if str(settings.get("library_caption_model", "lite")).lower() == "lite" and keys.get("GEMINI_API_KEY"):
+                try:
+                    lite = best_lite_model(keys["GEMINI_API_KEY"])
+                except Exception:
+                    lite = None
+                if lite:
+                    s.update(reranker="gemini", gemini_model=lite)
+            rr = Reranker(keys, s, log)
             self.rr = rr if rr.active else None
 
     def __call__(self, keyframe, cat, title):
@@ -412,9 +509,12 @@ class Builder:
         name, _, cat_entity = cat
         src_id = r["id"]
         asset, files = self._dvids_asset(src_id)
-        proxy_url, full_url = pick_files(files)
+        proxy_url, full_url, full_h = pick_files(files)
         if not proxy_url:
             self._mark(src_id, name, "failed", note="no mp4 file")
+            return 0
+        if full_h and full_h < MIN_SOURCE_HEIGHT:
+            self._mark(src_id, name, "skipped", note=f"only {full_h}p (needs {MIN_SOURCE_HEIGHT}p+)")
             return 0
         min_start = num(asset.get("time_start"))
         with tempfile.TemporaryDirectory() as td:
@@ -440,12 +540,12 @@ class Builder:
             for st, L in sorted(clean):
                 if self.stop.is_set():
                     break
-                if self.add_shot_from_url(full_url, st, L, name, cat_entity, asset, r):
+                if self.add_shot_from_url(full_url, st, L, name, cat_entity, asset, r, full_h):
                     added += 1
         self._mark(src_id, name, "done", added)
         return added
 
-    def add_shot_from_url(self, url, st, L, cat_name, cat_entity, asset, r):
+    def add_shot_from_url(self, url, st, L, cat_name, cat_entity, asset, r, src_height=0):
         base = f"dvids_{re.sub(r'[^0-9A-Za-z]+', '_', r['id'])}_{int(st * 100)}"
         out, kf = self.dir / f"{base}.mp4", self.dir / f"{base}.jpg"
         tmp = self.dir / f"{base}.part.mp4"
@@ -467,13 +567,17 @@ class Builder:
         return self._insert(out, kf, source="dvids", src_id=r["id"], src_start=st, length=duration(out),
                             title=r.get("title") or "", cat_name=cat_name, cat_entity=cat_entity,
                             credit=r.get("credit") or "DVIDS", license="Public domain (US DoD / DVIDS)",
-                            page_url=r.get("page_url") or asset.get("url") or "", origin="build")
+                            page_url=r.get("page_url") or asset.get("url") or "", origin="build",
+                            src_height=src_height)
 
     def _load_dups(self):
         with _DB_LOCK:
             con = _db(self.settings)
             rows = [dict(r) for r in con.execute(
                 "SELECT id, phash, emb, keyframe, source, src_id, src_start, length FROM shots")]
+            # shots you deleted in the browser stay out: they count as duplicates forever
+            rows += [dict(r, id=-2, keyframe=None) for r in con.execute(
+                "SELECT phash, emb, source, src_id, src_start, length FROM deleted")]
             fix = []
             for r in rows:
                 if not r["phash"] and r["keyframe"] and Path(r["keyframe"]).exists():
@@ -508,11 +612,11 @@ class Builder:
         return None
 
     def _insert(self, out, kf, source, src_id, src_start, length, title, cat_name, cat_entity, credit, license,
-                page_url, origin, caption=None):
+                page_url, origin, caption=None, src_height=0):
         if not Path(kf).exists():
             Path(out).unlink(missing_ok=True)
             return False
-        vec = clip_image_vecs(self.settings, [kf])[0]
+        vec, n_frames = shot_vec(self.settings, out, length, kf)
         ph = dhash(kf)
         with self._dup_lock:
             dup = self.duplicate_of(vec, ph, source, src_id, num(src_start), num(length))
@@ -536,12 +640,17 @@ class Builder:
                " ".join(str(t) for t in tags)[:300], str(cap.get("shot") or "")[:20], num(cap.get("quality"), 0),
                credit[:200], license[:120], page_url[:300], vec.astype(np.float32).tobytes(), time.time(), origin,
                str(ph))
+        action = str(cap.get("action") or "").lower()
+        if action not in ACTION_NAMES:
+            action = detect_action(" ".join([str(cap.get("caption") or ""), " ".join(map(str, tags)), title]))
+        row = row + (action, n_frames, int(num(src_height)))
         with _DB_LOCK:
             con = _db(self.settings)
             try:
                 con.execute("""INSERT INTO shots(source, src_id, title, category, src_start, length, file, keyframe,
-                    caption, entity, tags, shot_type, quality, credit, license, page_url, emb, added, origin, phash)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
+                    caption, entity, tags, shot_type, quality, credit, license, page_url, emb, added, origin, phash,
+                    action, frames, src_height)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
                 con.commit()
                 ok = True
             except sqlite3.IntegrityError:
@@ -559,6 +668,8 @@ class Builder:
         self.captioner = Captioner(self.keys, self.settings, self.log)
         self.log(f"library build: target {target} shots, {len(cats)} categories, {self.per_video} shots per video, "
                  f"captions: {'on (' + self.captioner.rr.label + ')' if self.captioner.rr else 'off'}; folder {self.dir}")
+        backup_index(self.settings)
+        self.upgrade_vectors()
         have = stats(self.settings)["shots"]
         if have >= target:
             self.log(f"library already has {have} shots (target {target}) - raise the target to add more")
@@ -635,6 +746,8 @@ class Builder:
                 continue
             if num(p.get("gemini_score"), 0) < min_score or not Path(f["file"]).exists() or num(f.get("length")) < 1.5:
                 continue
+            if num(f.get("src_height")) and num(f.get("src_height")) < MIN_SOURCE_HEIGHT:
+                continue
             sp = specs.get(bid, {})
             base = f"{f['source']}_{re.sub(r'[^0-9A-Za-z]+', '_', str(f['id']))}_{int(num(f.get('start')) * 100)}"
             out, kf = self.dir / f"{base}.mp4", self.dir / f"{base}.jpg"
@@ -648,9 +761,117 @@ class Builder:
             if self._insert(out, kf, source=f["source"], src_id=str(f["id"]), src_start=num(f.get("start")),
                             length=num(f.get("length")), title=f.get("title") or "", cat_name="learned",
                             cat_entity=sp.get("entity") or "", credit=f.get("credit") or "", license=f.get("license") or "",
-                            page_url=f.get("page_url") or "", origin=f"video:{proj.name}", caption=cap):
+                            page_url=f.get("page_url") or "", origin=f"video:{proj.name}", caption=cap,
+                            src_height=num(f.get("src_height"))):
                 added += 1
+        backup_index(self.settings)
         return added
+
+    def upgrade_vectors(self):
+        """Shots added before 3-frame vectors existed get them now (once)."""
+        with _DB_LOCK:
+            con = _db(self.settings)
+            rows = [dict(r) for r in con.execute("SELECT id, file, keyframe, length FROM shots WHERE COALESCE(frames,1) < 2")]
+            con.close()
+        done = 0
+        for r in rows:
+            if self.stop.is_set():
+                break
+            if not Path(r["file"]).exists():
+                continue
+            v, n = shot_vec(self.settings, r["file"], r["length"], r["keyframe"])
+            if n < 2:
+                continue
+            with _DB_LOCK:
+                con = _db(self.settings)
+                con.execute("UPDATE shots SET emb = ?, frames = ? WHERE id = ?", (v.tobytes(), n, r["id"]))
+                con.commit()
+                con.close()
+            done += 1
+        if done:
+            self.log(f"library: {done} older shots upgraded to 3-frame vectors")
+        return done
+
+
+# ---------------------------------------------------------------- backup
+def backup_index(settings=None, keep=7):
+    """One copy of index.db per day (sqlite backup API: consistent even while in use); the last `keep` days kept."""
+    src = db_path(settings)
+    if not src.exists():
+        return None
+    bdir = lib_dir(settings) / "backups"
+    bdir.mkdir(exist_ok=True)
+    dst = bdir / f"index-{time.strftime('%Y%m%d')}.db"
+    if dst.exists():
+        return dst
+    with _DB_LOCK:
+        a, b = sqlite3.connect(src), sqlite3.connect(dst)
+        a.backup(b)
+        a.close()
+        b.close()
+    for old in sorted(bdir.glob("index-*.db"))[:-keep]:
+        old.unlink()
+    return dst
+
+
+# ---------------------------------------------------------------- browser (Library tab)
+def list_shots(settings=None, q="", category="", favorites=False, sort="new", offset=0, limit=60):
+    where, args = [], []
+    for w in (q or "").lower().split():
+        where.append("LOWER(COALESCE(caption,'')||' '||COALESCE(entity,'')||' '||COALESCE(tags,'')||' '||"
+                     "COALESCE(title,'')||' '||COALESCE(category,'')||' '||COALESCE(action,'')) LIKE ?")
+        args.append(f"%{w}%")
+    if category:
+        where.append("category = ?")
+        args.append(category)
+    if favorites:
+        where.append("favorite = 1")
+    order = {"new": "added DESC", "uses": "uses DESC, added DESC", "unused": "uses ASC, added DESC",
+             "quality": "quality DESC, added DESC"}.get(sort, "added DESC")
+    sql = ("SELECT id, caption, entity, action, category, length, uses, last_used, favorite, quality, origin, title, "
+           "source, src_id FROM shots" + (" WHERE " + " AND ".join(where) if where else "") +
+           f" ORDER BY {order} LIMIT ? OFFSET ?")
+    with _DB_LOCK:
+        con = _db(settings)
+        rows = [dict(r) for r in con.execute(sql, args + [int(limit), int(offset)])]
+        total = con.execute("SELECT COUNT(*) FROM shots" + (" WHERE " + " AND ".join(where) if where else ""),
+                            args).fetchone()[0]
+        con.close()
+    return {"total": total, "shots": rows}
+
+
+def shot_row(settings, shot_id):
+    with _DB_LOCK:
+        con = _db(settings)
+        r = con.execute("SELECT * FROM shots WHERE id = ?", (int(shot_id),)).fetchone()
+        con.close()
+    return dict(r) if r else None
+
+
+def set_favorite(settings, shot_id, on=True):
+    with _DB_LOCK:
+        con = _db(settings)
+        con.execute("UPDATE shots SET favorite = ? WHERE id = ?", (1 if on else 0, int(shot_id)))
+        con.commit()
+        con.close()
+
+
+def delete_shot(settings, shot_id):
+    """Removes the files and the entry, and remembers the picture so the builder never adds it again."""
+    r = shot_row(settings, shot_id)
+    if not r:
+        return False
+    with _DB_LOCK:
+        con = _db(settings)
+        con.execute("INSERT INTO deleted VALUES(?,?,?,?,?,?,?)", (r.get("phash"), r["source"], r["src_id"],
+                    r["src_start"], r["length"], r["emb"], time.time()))
+        con.execute("DELETE FROM shots WHERE id = ?", (int(shot_id),))
+        con.commit()
+        con.close()
+    for f in (r.get("file"), r.get("keyframe")):
+        if f:
+            Path(f).unlink(missing_ok=True)
+    return True
 
 
 # ---------------------------------------------------------------- background job (one at a time)

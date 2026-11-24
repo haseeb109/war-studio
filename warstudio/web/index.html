@@ -269,6 +269,23 @@
       <div id="lbStats" class="muted" style="margin-bottom:10px"></div>
       <pre id="lbLog" style="background:#0c0f14;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:340px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
     </div>
+    <div class="card">
+      <h2>Browse shots</h2>
+      <p class="muted">Click a picture to play it. &#9733; = favourite (picked a little more often). &#128465; = delete: the files go
+        and the builder never adds that picture again.</p>
+      <div class="row" style="margin:10px 0">
+        <div><label>Search</label><input id="lbQ" placeholder="e.g. f-15e takeoff night"></div>
+        <div><label>Category</label><select id="lbCat"><option value="">All</option></select></div>
+        <div><label>Sort</label><select id="lbSort"><option value="new">Newest</option><option value="uses">Most used</option>
+          <option value="unused">Least used</option><option value="quality">Best quality</option></select></div>
+        <div style="flex:0;min-width:120px"><label style="display:flex;gap:6px;align-items:center;color:var(--text)">
+          <input type="checkbox" id="lbFav" style="width:auto"> Favourites</label></div>
+        <div style="flex:0"><button class="btn ghost" id="lbFind">Show</button></div>
+      </div>
+      <div id="lbCount" class="muted" style="margin-bottom:8px"></div>
+      <div id="lbGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
+      <div style="text-align:center;margin-top:12px"><button class="btn ghost hidden" id="lbMore">Load more</button></div>
+    </div>
   </section>
 
   <!-- SYSTEM CHECK -->
@@ -431,6 +448,8 @@ async function loadLibrary() {
     box.innerHTML = d.categories.map(c => `<label style="display:flex;gap:6px;align-items:center;color:var(--text);font-size:13px">
       <input type="checkbox" class="lbCat" value="${esc(c)}" style="width:auto" ${off.includes(c) ? "" : "checked"}> ${esc(c)}
       <span class="muted" data-cat="${esc(c)}"></span></label>`).join("");
+    $("#lbCat").insertAdjacentHTML("beforeend", d.categories.concat(["learned"]).map(c => `<option>${esc(c)}</option>`).join(""));
+    lbFind(false);
     box.querySelectorAll(".lbCat").forEach(x => x.onchange = () => { try { localStorage.setItem("ws_lb_off",
       JSON.stringify([...box.querySelectorAll(".lbCat")].filter(y => !y.checked).map(y => y.value))); } catch (e) {} });
     box.dataset.done = "1";
@@ -460,6 +479,52 @@ $("#lbStart").onclick = async () => {
   loadLibrary();
 };
 $("#lbStop").onclick = async () => { try { await api("/api/library/stop", {}); toast("Stopping after the current videos"); } catch (e) { toast(e.message); } loadLibrary(); };
+
+let LB_OFF = 0;
+function lbCard(x) {
+  const used = x.uses ? `used ${x.uses}x` : "unused";
+  return `<div class="card" style="padding:8px;margin:0" data-shot="${x.id}">
+    <div style="position:relative;cursor:pointer" data-play="${x.id}">
+      <img loading="lazy" src="/api/library/thumb/${x.id}" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:6px;display:block">
+    </div>
+    <div style="font-size:12px;margin-top:6px;line-height:1.35">${esc((x.caption || x.title || "").slice(0, 90))}</div>
+    <div class="muted" style="font-size:11px;margin-top:4px">${esc(x.entity || "")}${x.action ? " · " + esc(x.action) : ""} · ${(+x.length || 0).toFixed(1)}s · ${used}${x.quality ? " · q" + (+x.quality).toFixed(0) : ""}${String(x.origin || "").startsWith("video:") ? " · learned" : ""}</div>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button class="btn ghost" data-fav="${x.id}" data-on="${x.favorite ? 1 : 0}" style="padding:4px 10px">${x.favorite ? "&#9733;" : "&#9734;"}</button>
+      <button class="btn ghost" data-del="${x.id}" style="padding:4px 10px">&#128465;</button>
+    </div></div>`;
+}
+async function lbFind(more) {
+  LB_OFF = more ? LB_OFF : 0;
+  const p = new URLSearchParams({q: $("#lbQ").value, category: $("#lbCat").value, favorites: $("#lbFav").checked,
+                                 sort: $("#lbSort").value, offset: LB_OFF, limit: 60});
+  let d;
+  try { d = await (await fetch("/api/library/shots?" + p)).json(); } catch (e) { return; }
+  const html = d.shots.map(lbCard).join("");
+  if (more) $("#lbGrid").insertAdjacentHTML("beforeend", html); else $("#lbGrid").innerHTML = html || '<span class="muted">No shots yet.</span>';
+  LB_OFF += d.shots.length;
+  $("#lbCount").textContent = `${d.total} shots`;
+  $("#lbMore").classList.toggle("hidden", LB_OFF >= d.total);
+}
+$("#lbFind").onclick = () => lbFind(false);
+$("#lbMore").onclick = () => lbFind(true);
+$("#lbQ").addEventListener("keydown", e => { if (e.key === "Enter") lbFind(false); });
+$("#lbGrid").addEventListener("click", async e => {
+  const play = e.target.closest("[data-play]"), fav = e.target.closest("[data-fav]"), del = e.target.closest("[data-del]");
+  if (play) {
+    play.innerHTML = `<video src="/api/library/video/${play.dataset.play}" autoplay controls muted playsinline
+      style="width:100%;aspect-ratio:16/9;border-radius:6px;display:block;background:#000"></video>`;
+    play.removeAttribute("data-play");
+  } else if (fav) {
+    const on = fav.dataset.on !== "1";
+    try { await api(`/api/library/shots/${fav.dataset.fav}/favorite`, {on}); fav.dataset.on = on ? "1" : "0"; fav.innerHTML = on ? "&#9733;" : "&#9734;"; }
+    catch (err) { toast(err.message); }
+  } else if (del) {
+    if (!confirm("Delete this shot from the library? It will not be added again.")) return;
+    try { await api(`/api/library/shots/${del.dataset.del}/delete`, {}); del.closest("[data-shot]").remove(); toast("Shot deleted"); }
+    catch (err) { toast(err.message); }
+  }
+});
 
 function showSection(id) { document.querySelectorAll("main section").forEach(s => s.classList.toggle("hidden", s.id !== id)); }
 

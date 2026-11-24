@@ -60,6 +60,8 @@ DEFAULT_SETTINGS = {
     "library_min_clip": 0.24,    # CLIP similarity a library shot needs to be used without online search
     "library_shots_per_video": 4,
     "library_captions": "auto",  # auto = caption new shots once with the reranker model (Gemini/Groq); off
+    "library_rotation_videos": 5,   # a library shot used in one of the last N videos rests (unless nothing else fits)
+    "library_caption_model": "lite",   # lite = newest Gemini Flash-Lite for shot captions (~half price); same = reranker model
     "library_learn": True,       # clean online clips of each finished video join the library
     "library_learn_sources": ["dvids"],
     "library_learn_min_score": 0,   # Gemini score a clip needs to be learned (0 = every clean clip)     # video segments encoded at the same time     # beats reranked at the same time (paid Gemini handles this easily)

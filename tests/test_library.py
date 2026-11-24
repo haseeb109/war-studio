@@ -153,7 +153,7 @@ def test_builder_process_video_end_to_end(settings, tmp_path, monkeypatch):
     b = library.Builder({"DVIDS_API_KEY": "k"}, dict(settings, library_shots_per_video=2), lambda m: None)
     monkeypatch.setattr(b, "_dvids_asset", lambda i: ({"time_start": 0}, [
         {"src": str(src), "height": 180, "width": 320}, {"src": str(src) + "?hd", "height": 180, "width": 320}]))
-    monkeypatch.setattr(library, "pick_files", lambda files: (str(src), str(src)))
+    monkeypatch.setattr(library, "pick_files", lambda files: (str(src), str(src), 1080))
     monkeypatch.setattr(library, "download", lambda url, dest, timeout=0: shutil.copy(url, dest))
     monkeypatch.setattr(library, "plan_shots", lambda cuts, dur, ms: [(0.3, 2.4), (3.3, 2.4), (6.3, 2.4), (9.3, 2.4)])
     n = b.process_video(("Test cat", "q", "F-15E"), {"id": "video:1", "title": "F-15E B-Roll"})
@@ -228,3 +228,121 @@ def test_candidates_walk_result_pages(settings, monkeypatch):
     first = b.candidates("F-15E", want=12)
     assert len(first) == 25 and b.pages["F-15E"] == 3     # needed page 2 to reach 12 new videos
     assert b.candidates("F-15E", want=12) == [] and b.pages["F-15E"] > 3   # no more pages
+
+
+# ---------------------------------------------------------------- v0.8.2 improvements
+def test_detect_action():
+    assert library.detect_action("two F-15E Strike Eagles lift off from a desert air base") == "takeoff"
+    assert library.detect_action("they meet a KC-135 tanker and the boom operator lowers the boom") == "refueling"
+    assert library.detect_action("the first missile leaves the rail") == "launch"
+    assert library.detect_action("operators watch the thermal feed") == "console"
+    assert library.detect_action("a calm harbor") == ""
+
+
+def _add_full(settings, name, entity, caption, action="", seed=None):
+    from PIL import Image
+    d = Path(settings["library_dir"])
+    d.mkdir(parents=True, exist_ok=True)
+    f, kf = d / f"{name}.mp4", d / f"{name}.jpg"
+    f.write_bytes(b"x")
+    Image.fromarray((np.random.default_rng(seed or sum(map(ord, name))).random((90, 160, 3)) * 255).astype(np.uint8)).save(kf)
+    return library.Builder({}, settings, lambda m: None)._insert(
+        f, kf, source="dvids", src_id=name, src_start=0, length=6, title=caption, cat_name="c", cat_entity=entity,
+        credit="", license="", page_url="", origin="build", caption={"caption": caption, "entity": entity, "action": action})
+
+
+def test_action_tag_prefers_the_right_moment(settings):
+    _add_full(settings, "a_taxi", "F-15E", "F-15E parked on the ramp", "taxi")
+    _add_full(settings, "a_take", "F-15E", "F-15E lifting off with afterburner", "takeoff")
+    idx = library.LibraryIndex(settings)
+    v = np.zeros(512, np.float32)
+    v[ord("a")] = 1                       # both shots have the same CLIP similarity in the fake model
+    top = idx.match(v, "F-15E", "two F-15E lift off from the base")
+    assert top[0]["video_url"].endswith("a_take.mp4") and top[0]["action"] == "takeoff"
+
+
+def test_rotation_rests_recent_shots(settings, tmp_path):
+    _add_full(settings, "a_one", "", "fighter jet")
+    _add_full(settings, "a_two", "", "fighter jet again")
+    for i in range(3):
+        library.record_uses(tmp_path / f"old{i}", {"0": {"source": "library", "id": "1"}}, settings)
+    idx = library.LibraryIndex(dict(settings, library_rotation_videos=5))
+    v = np.zeros(512, np.float32)
+    v[ord("a")] = 1
+    assert 1 in idx.rotated
+    assert [r["id"] for r in idx.match(v, "", "jet")] == ["2"]          # shot 1 rests
+    library.delete_shot(settings, 2)
+    idx2 = library.LibraryIndex(dict(settings, library_rotation_videos=5))
+    only = idx2.match(v, "", "jet")
+    assert [r["id"] for r in only] == ["1"] and only[0]["lib_penalty"] >= 0.05   # nothing else fits: used, penalised
+    # the project being made right now does not rest its own shots (resume / re-run)
+    idx3 = library.LibraryIndex(dict(settings, library_rotation_videos=1), exclude_project="old2")
+    assert 1 in idx3.rotated            # still used by old1 (the newest other project)
+
+
+def test_favorite_and_delete_never_readded(settings, tmp_path):
+    _add_full(settings, "a_fav", "", "jet")
+    library.set_favorite(settings, 1, True)
+    lst = library.list_shots(settings, favorites=True)
+    assert lst["total"] == 1 and lst["shots"][0]["favorite"] == 1
+    assert library.delete_shot(settings, 1)
+    assert not (Path(settings["library_dir"]) / "a_fav.mp4").exists()
+    # the same picture comes back later (e.g. learned from a video): treated as a duplicate
+    assert not _add_full(settings, "a_fav2", "", "jet", seed=sum(map(ord, "a_fav")))
+    assert library.stats(settings)["deleted"] == 1
+
+
+def test_three_frame_vector(settings, tmp_path):
+    v = mkvid(tmp_path / "m.mp4", ["testsrc2", "testsrc"])
+    vec, n = library.shot_vec(settings, v, 6.0, None)
+    assert n == 3 and abs(float(np.linalg.norm(vec)) - 1) < 1e-5
+
+
+def test_low_resolution_sources_are_skipped(settings, tmp_path, monkeypatch):
+    b = library.Builder({"DVIDS_API_KEY": "k"}, settings, lambda m: None)
+    monkeypatch.setattr(b, "_dvids_asset", lambda i: ({}, [{"src": "a.mp4", "height": 480}]))
+    assert library.pick_files([{"src": "a.mp4", "height": 480}, {"src": "b.mp4", "height": 360}])[2] == 480
+    assert b.process_video(("c", "q", ""), {"id": "video:lowres", "title": "t"}) == 0
+    assert library.stats(settings)["videos"] == {"skipped": 1}
+
+
+def test_best_lite_model(monkeypatch):
+    import warstudio.llm as llm
+    monkeypatch.setattr(llm, "gemini_models", lambda k: ["gemini-3.8-flash", "gemini-3.1-flash-lite",
+                                                        "gemini-3.5-flash-lite", "gemini-3.9-flash-lite-preview"])
+    assert library.best_lite_model("k") == "gemini-3.5-flash-lite"
+
+
+def test_backup_index_daily_and_keeps_seven(settings):
+    _add_full(settings, "a_b", "", "jet")
+    bdir = Path(settings["library_dir"]) / "backups"
+    bdir.mkdir(parents=True, exist_ok=True)
+    for i in range(9):
+        (bdir / f"index-2020010{i}.db").write_bytes(b"x")
+    dst = library.backup_index(settings)
+    assert dst.exists() and dst.stat().st_size > 100
+    assert len(list(bdir.glob("index-*.db"))) == 7 and dst in list(bdir.glob("index-*.db"))
+
+
+def test_review_search_shows_library_first(settings, monkeypatch):
+    import warstudio.config as config
+    from warstudio import edits
+    _add_full(settings, "a_rev", "F-15E", "F-15E takeoff")
+    monkeypatch.setattr(config, "load_settings", lambda: dict(settings, use_commons=False))
+    monkeypatch.setattr(edits, "load_keys", lambda: {})
+    monkeypatch.setattr(library, "clip_text_vecs", lambda s, t: np.stack([np.eye(512, dtype=np.float32)[ord("a")]]))
+    res = edits.search("proj", "f-15e takeoff")
+    assert res and res[0]["source"] == "library" and res[0]["preview_url"] == "/api/library/thumb/1"
+
+
+def test_browser_api(settings, monkeypatch):
+    from fastapi.testclient import TestClient
+    from warstudio import server
+    _add_full(settings, "a_api", "", "jet over sea")
+    monkeypatch.setattr(server, "load_settings", lambda: settings)
+    c = TestClient(server.app)
+    assert c.get("/api/library/shots", params={"q": "sea"}).json()["total"] == 1
+    assert c.get("/api/library/thumb/1").status_code == 200
+    assert c.post("/api/library/shots/1/favorite", json={"on": True}).json()["ok"]
+    assert c.post("/api/library/shots/1/delete").json()["ok"]
+    assert c.get("/api/library/thumb/1").status_code == 404

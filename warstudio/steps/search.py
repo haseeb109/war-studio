@@ -201,12 +201,12 @@ def order_for(fc, style):
     return order
 
 
-def library_first(specs, done, settings, log):
+def library_first(specs, done, settings, log, project=None):
     """Match every beat against the local shot library. A good match fills the beat's candidates from the
     library only (no online search, no Gemini rerank for that beat). Returns how many beats matched."""
     try:
         from ..library import LibraryIndex, clip_text_vecs
-        idx = LibraryIndex(settings)
+        idx = LibraryIndex(settings, exclude_project=project)
     except Exception as e:
         log(f"library: not used ({str(e)[:120]})")
         return 0
@@ -227,6 +227,9 @@ def library_first(specs, done, settings, log):
         if res and res[0]["clip_sim"] >= thr:
             done[str(sp["id"])] = res
             hits += 1
+    if idx.rotated:
+        log(f"library: {len(idx.rotated)} shots rest this time (used in the last "
+            f"{int(settings.get('library_rotation_videos', 5))} videos)")
     log(f"library: {hits}/{len(todo)} beats matched from {len(idx)} shots (no online search, no Gemini for these)"
         + (f"; {len(todo) - hits} go online" if hits < len(todo) else ""))
     return hits
@@ -241,7 +244,7 @@ def run_step(proj, keys, settings, style, log):
     down = set()
     picked = list(settings.get("job_sources") or [])
     use_library = (not picked or "library" in picked) and str(settings.get("use_library", True)).lower() not in ("false", "0", "no")
-    lib_hits = library_first(specs, done, settings, log) if use_library else 0
+    lib_hits = library_first(specs, done, settings, log, proj.name) if use_library else 0
     if picked == ["library"]:
         # this video uses only the library: beats without a library match keep the previous clip
         write_json(out_path, done)

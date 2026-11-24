@@ -157,3 +157,18 @@ Every video ("My Library (first)" on the Create page):
 - **Growing past 1,000s of shots**: the builder walks DVIDS result pages per category (50 per page, up to 40 pages)
   and remembers where it stopped. "Stop at library size (GB)" on the Library tab (default 100).
 - Matching prefers shots with a higher quality score.
+
+### Library v0.8.2
+- **Browse shots** (Library tab): search, category, sort (newest / most used / least used / quality), favourites,
+  click to play, star = favourite (small matching bonus), bin = delete (files removed; the picture is remembered
+  and never added again).
+- **Review editor search** shows your library shots first.
+- **3-frame vectors**: each shot's CLIP vector is the average of frames at 25/50/75 %; older shots are upgraded at
+  the start of the next build.
+- **Action tags** (takeoff, landing, refueling, launch, explosion, firing, console, hover, taxi, sailing, patrol,
+  loading, formation, flying) from the caption; a beat whose visual line describes an action prefers shots with it.
+- **Rotation**: a shot used in one of the last 5 videos rests (`library_rotation_videos`); it is used only when
+  nothing else fits that beat, with a penalty.
+- **Captions on Flash-Lite** (`library_caption_model: lite`, about half the price).
+- **Daily backup** of `index.db` in `library/shots/backups/` (last 7 days).
+- **720p minimum**: DVIDS videos below 720p are skipped; learned clips from sub-720p sources too.
