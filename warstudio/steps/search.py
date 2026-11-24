@@ -25,7 +25,10 @@ def _cached_get(source, url, params, headers=None, ttl=7 * 86400):
     key = hashlib.md5((source + url + json.dumps(params, sort_keys=True)).encode()).hexdigest()
     p = CACHE / f"{source}_{key}.json"
     if p.exists() and time.time() - p.stat().st_mtime < ttl:
-        return json.loads(p.read_text())
+        d = json.loads(p.read_text())
+        if not _empty(d):
+            return d
+        p.unlink(missing_ok=True)              # an empty answer cached by an older version: ask again
     r = httpx.get(url, params=params, headers={"User-Agent": UA, **(headers or {})}, timeout=30)
     if r.status_code == 429:
         raise SourceDown(f"{source} rate limit (429)")
@@ -33,9 +36,22 @@ def _cached_get(source, url, params, headers=None, ttl=7 * 86400):
         raise SourceDown(f"{source} key rejected ({r.status_code})")
     r.raise_for_status()
     d = r.json()
-    CACHE.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(d))
+    if isinstance(d, dict) and (d.get("errors") or d.get("error")):
+        raise RuntimeError(f"{source} API error: {str(d.get('errors') or d.get('error'))[:200]}")
+    if not _empty(d):                           # never cache "no results": a bad request would stick for 7 days
+        CACHE.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(d))
     return d
+
+
+def _empty(d):
+    if not isinstance(d, dict):
+        return False
+    for k in ("results", "hits", "videos"):
+        if k in d and not d[k]:
+            return True
+    q = d.get("query")
+    return isinstance(q, dict) and "pages" in q and not q["pages"]
 
 
 def _thumb(v):
@@ -47,12 +63,21 @@ def _thumb(v):
 def search_dvids(q, key, n):
     # thumb_width/height: DVIDS defaults to 122x92 thumbnails, far too small for CLIP/Gemini to judge,
     # which made DVIDS clips lose every ranking against Pixabay's 640px previews.
-    d = _cached_get("dvids", "https://api.dvidshub.net/search",
-                    {"api_key": key, "type": "video", "q": q, "max_results": min(50, n),
-                     "thumb_width": 640, "thumb_height": 360, "sort": "score", "sortdir": "desc",
-                     "aspect_ratio": "landscape"})
+    # (v0.5 also sent aspect_ratio=landscape + thumb_height; on real runs that returned nothing for videos.)
+    # Ask with big thumbnails first; if that gives nothing, the plain query that has always worked;
+    # then the first words only (DVIDS full-text search needs every word to match).
+    base = {"api_key": key, "type": "video", "max_results": min(50, n)}
+    words = q.split()
+    attempts = [dict(base, q=q, thumb_width=640, sort="score", sortdir="desc"), dict(base, q=q)]
+    if len(words) > 2:
+        attempts.append(dict(base, q=" ".join(words[:2]), thumb_width=640))
+    results = []
+    for params in attempts:
+        results = _cached_get("dvids", "https://api.dvidshub.net/search", params).get("results") or []
+        if results:
+            break
     out = []
-    for r in d.get("results") or []:
+    for r in results:
         rid = str(r.get("id") or "")
         if not rid:
             continue
@@ -214,6 +239,10 @@ def run_step(proj, keys, settings, style, log):
                     continue
                 try:
                     res = call_source(src, q, keys, n, settings)
+                    with lock:
+                        z = zero.setdefault(src, [0, 0])
+                        z[0] += 1
+                        z[1] += 0 if res else 1
                 except SourceDown as e:
                     with lock:
                         if src not in down:
@@ -232,6 +261,8 @@ def run_step(proj, keys, settings, style, log):
                         cands.append(c)
         return bid, cands
 
+    zero = {}  # source -> [queries asked, queries with no result]
+
     todo = [sp for sp in specs if not done.get(str(sp["id"]))]
     with ThreadPoolExecutor(3) as ex:
         for i, (bid, cands) in enumerate(ex.map(one, todo), 1):
@@ -245,4 +276,13 @@ def run_step(proj, keys, settings, style, log):
     mix = Counter(c["source"] for v in done.values() for c in (v or []))
     log(f"search done; {empty} beats without candidates; candidates per source: " +
         (", ".join(f"{s} {n}" for s, n in mix.most_common()) or "none"))
+    for s, (asked, none) in zero.items():
+        if asked and none == asked:
+            log(f"WARNING: {s} returned no results for any of its {asked} searches — run System Check / Test the {s} key")
+    if specs and empty == len(specs):
+        # stop here instead of rendering a video that is black from start to end
+        raise RuntimeError("footage search found nothing for any beat (" + ", ".join(active) +
+                           "). Check the keys in Settings, run System Check, or pick more sources on the Create page.")
+    if specs and empty > len(specs) * 0.5:
+        log(f"WARNING: {empty}/{len(specs)} beats have no footage candidates; they will repeat the previous clip")
     return done

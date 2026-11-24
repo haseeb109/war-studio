@@ -161,7 +161,14 @@ def test_dvids(key):
     if isinstance(d, dict) and d.get("errors"):
         return False, f"DVIDS: {str(d['errors'])[:180]}"
     total = (d.get("page_info") or {}).get("total_results") if isinstance(d, dict) else None
-    return True, "search OK" + (f" ({total} videos for 'fighter jet')" if total else "")
+    # the same search the pipeline runs (with its parameters), so a request the pipeline breaks fails here too
+    from .steps.search import search_dvids
+    got = search_dvids("F-15E Strike Eagle takeoff", key, 5)
+    if not got:
+        return False, "DVIDS key works, but the pipeline's search returned 0 clips for 'F-15E Strike Eagle takeoff'"
+    small = sum(1 for c in got if "122x92" in (c.get("preview_url") or ""))
+    return True, (f"search OK ({total or '?'} videos for 'fighter jet'); pipeline search: {len(got)} clips"
+                  + (f", {small} with tiny previews" if small else ", 640px previews"))
 
 
 def test(key_name, key=None):

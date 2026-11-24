@@ -87,3 +87,65 @@ def test_search_uses_only_sources_picked_for_the_video(tmp_path, monkeypatch):
     (tmp_path / "candidates.json").unlink()
     search.run_step(tmp_path, keys, {}, style, lambda m, **k: None)
     assert set(called) == {"dvids", "commons", "pixabay"}
+
+
+def test_dvids_falls_back_to_plain_query_and_never_caches_empty(tmp_path, monkeypatch):
+    import httpx
+    monkeypatch.setattr(search, "CACHE", tmp_path)
+    seen = []
+
+    class R:
+        status_code = 200
+
+        def __init__(self, d):
+            self.d = d
+
+        def json(self):
+            return self.d
+
+        def raise_for_status(self):
+            pass
+
+    def get(url, params=None, **kw):
+        seen.append(dict(params))
+        if "thumb_width" in params and params["q"] == "F-15E Strike Eagle takeoff":
+            return R({"results": []})
+        return R({"results": [{"id": "video:1", "title": "F-15E B-Roll", "thumbnail": "https://t/1_122x92.jpg",
+                               "duration": 120}]})
+    monkeypatch.setattr(httpx, "get", get)
+    res = search.search_dvids("F-15E Strike Eagle takeoff", "k", 10)
+    assert [r["id"] for r in res] == ["video:1"] and len(seen) == 2
+    assert "aspect_ratio" not in seen[0] and "thumb_width" not in seen[1]
+    assert len(list(tmp_path.glob("dvids_*.json"))) == 1        # only the non-empty answer is cached
+    search.search_dvids("F-15E Strike Eagle takeoff", "k", 10)
+    assert len(seen) == 3                                         # empty answer asked again, full one from cache
+
+
+def test_api_error_payload_is_raised(tmp_path, monkeypatch):
+    import httpx
+    import pytest
+    monkeypatch.setattr(search, "CACHE", tmp_path)
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"errors": ["invalid parameter: aspect_ratio"]}
+
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: R())
+    with pytest.raises(RuntimeError, match="aspect_ratio"):
+        search.search_dvids("f-35", "k", 5)
+
+
+def test_search_stops_instead_of_rendering_black(tmp_path, monkeypatch):
+    import pytest
+    from warstudio.util import write_json
+    write_json(tmp_path / "specs.json", [{"id": 0, "queries": ["x"], "tiers": ["category"], "footage_class": "real"}])
+    monkeypatch.setattr(search, "call_source", lambda *a, **k: [])
+    logs = []
+    with pytest.raises(RuntimeError, match="found nothing for any beat"):
+        search.run_step(tmp_path, {"DVIDS_API_KEY": "d"}, {"job_sources": ["dvids"]},
+                        {"footage": {"source_order": ["dvids"]}}, lambda m, **k: logs.append(m))
+    assert any("WARNING: dvids returned no results" in m for m in logs)
