@@ -102,7 +102,7 @@ class ProviderBusy(LLMError):
 
 # per-model request options that the model rejected once (400) - not sent again in this session
 _GEMINI_NO_OPT = {}
-GEMINI_TIMEOUT = 45
+GEMINI_TIMEOUT = 30     # a rerank answer takes a few seconds; a call this slow means the model is struggling
 GEMINI_RETRY_WAITS = (2.0, 5.0)        # 503/500/timeouts: two quick retries, then the caller falls back
 GEMINI_MAX_RPM_WAIT = 60               # a per-minute 429 shorter than this is waited out
 
@@ -119,9 +119,29 @@ def _gemini_retry_delay(r):
     return _retry_after(r)
 
 
+def gemini_quota_info(r):
+    """What a 429 says: {'ids': [quotaId...], 'metrics': [...], 'free_tier': bool, 'daily': bool, 'delay': s}."""
+    ids, metrics = [], []
+    try:
+        for det in (r.json().get("error", {}).get("details") or []):
+            for v in det.get("violations") or []:
+                if v.get("quotaId"):
+                    ids.append(v["quotaId"])
+                if v.get("quotaMetric"):
+                    metrics.append(v["quotaMetric"])
+    except Exception:
+        pass
+    text = r.text.lower()
+    free = "free_tier" in text or "freetier" in text
+    if ids:
+        daily = any("perday" in i.lower() for i in ids) and not any("perminute" in i.lower() for i in ids)
+    else:
+        daily = any(x in text for x in ("perday", "per day", "per_day", "requests_per_day"))
+    return {"ids": ids, "metrics": metrics, "free_tier": free, "daily": daily, "delay": _gemini_retry_delay(r)}
+
+
 def _is_daily_quota(r):
-    t = r.text.lower()
-    return any(x in t for x in ("perday", "per day", "per_day", "requests_per_day", "daily"))
+    return gemini_quota_info(r)["daily"]
 
 
 def gemini_body(img_b64, prompt, opts):
@@ -152,12 +172,15 @@ def gemini_pick(key, model, image_path, prompt, timeout=GEMINI_TIMEOUT, retry_wa
         opts = {"thinking", "media"} - _GEMINI_NO_OPT.get(model, set())
         try:
             r = httpx.post(url, json=gemini_body(img, prompt, opts), timeout=timeout)
-        except (httpx.TimeoutException, httpx.TransportError) as e:
+        except httpx.TimeoutException as e:
+            # no retry on the same model: another 30 s wait rarely helps - the caller moves to a backup model
+            raise ProviderBusy(f"gemini {model}: no answer in {timeout}s ({type(e).__name__})")
+        except httpx.TransportError as e:
             if waits:
                 sleep(waits.pop(0))
                 retries += 1
                 continue
-            raise ProviderBusy(f"gemini {model}: network/timeout ({type(e).__name__})")
+            raise ProviderBusy(f"gemini {model}: network error ({type(e).__name__})")
         if r.status_code == 400 and opts:
             low = r.text.lower()
             bad = {o for o, words in (("thinking", ("thinking",)), ("media", ("media", "resolution"))) if o in opts
@@ -169,9 +192,13 @@ def gemini_pick(key, model, image_path, prompt, timeout=GEMINI_TIMEOUT, retry_wa
             _GONE.add(model)
             raise ModelGone(f"gemini model '{model}' " + _one_line_error(r))
         if r.status_code == 429:
-            delay = _gemini_retry_delay(r)
-            if _is_daily_quota(r) or delay > GEMINI_MAX_RPM_WAIT:
-                raise QuotaExhausted("gemini " + _one_line_error(r))
+            q = gemini_quota_info(r)
+            delay = q["delay"]
+            if q["daily"] or delay > GEMINI_MAX_RPM_WAIT:
+                tier = "FREE tier" if q["free_tier"] else "paid tier"
+                which = ", ".join(q["ids"][:2]) or _one_line_error(r)[-120:]
+                raise QuotaExhausted(f"gemini {model}: {tier} quota used up ({which})", model=model,
+                                     free_tier=q["free_tier"])
             if retries < 4:
                 sleep((delay or 10) + 0.5)
                 retries += 1
@@ -221,7 +248,11 @@ _GROQ_MODELS = {}
 
 
 class QuotaExhausted(LLMError):
-    """Daily / long quota used up: stop calling this provider for the rest of the run."""
+    """Daily / long quota used up: stop calling this model (or provider) for the rest of the run."""
+
+    def __init__(self, msg="", model=None, free_tier=False):
+        super().__init__(msg)
+        self.model, self.free_tier = model, free_tier
 
 
 def groq_models(key):

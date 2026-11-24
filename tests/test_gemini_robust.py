@@ -47,11 +47,23 @@ def test_503_three_times_raises_busy_not_error(img, monkeypatch):
 
 
 def test_daily_quota_vs_per_minute(img, monkeypatch):
-    day = R(429, {"error": {"message": "Quota exceeded for metric: generate_content_free_tier_requests, limit: 20, "
-                                       "quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier"}})
+    day = R(429, {"error": {"message": "* Quota exceeded for metric: generativelanguage.googleapis.com/"
+                                       "generate_content_free_tier_requests, limit: 20",
+                            "details": [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                                {"quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                                 "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]},
+                                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "41s"}]}})
     monkeypatch.setattr(httpx, "post", lambda *a, **k: day)
-    with pytest.raises(llm.QuotaExhausted):
+    with pytest.raises(llm.QuotaExhausted) as ei:
         llm.gemini_pick("k", "m", img, "p", sleep=lambda s: None)
+    assert ei.value.free_tier and ei.value.model == "m" and "FREE tier" in str(ei.value)
+    # a free-tier PER-MINUTE limit with a short delay is waited out, not treated as used up
+    rpm = R(429, {"error": {"message": "free_tier", "details": [
+        {"violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]},
+        {"retryDelay": "12s"}]}})
+    seq, slept = [rpm, ok()], []
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: seq.pop(0))
+    assert llm.gemini_pick("k", "m", img, "p", sleep=slept.append)[0]["best"] == 2 and slept == [12.5]
     minute = R(429, {"error": {"message": "per minute", "details": [{"@type": "RetryInfo", "retryDelay": "7s"}]}})
     seq, slept = [minute, ok()], []
     monkeypatch.setattr(httpx, "post", lambda *a, **k: seq.pop(0))
@@ -132,3 +144,39 @@ def test_busy_gemini_covered_by_groq(monkeypatch, tmp_path):
     assert rr.chain == ["gemini", "groq"]
     assert rr.pick(lambda t: str(tmp_path / "c.jpg"), "p") == ({"best": 2}, "groq")
     assert rr.stats["covered_by_other"] == 1
+
+
+def test_timeout_moves_on_without_retrying(img, monkeypatch):
+    calls = []
+
+    def post(*a, **k):
+        calls.append(1)
+        raise httpx.ReadTimeout("slow")
+    monkeypatch.setattr(httpx, "post", post)
+    with pytest.raises(llm.ProviderBusy, match="no answer in"):
+        llm.gemini_pick("k", "m", img, "p", sleep=lambda s: None)
+    assert len(calls) == 1
+
+
+def test_quota_on_one_model_keeps_the_others(monkeypatch, tmp_path):
+    calls = []
+
+    def beh(key, model, col, prompt, retry_waits=None):
+        calls.append(model)
+        if model == "gemini-3.8-flash":
+            raise llm.QuotaExhausted("free quota", model=model, free_tier=True)
+        return {"best": 1}, {}
+    rr, logs = make_rr(monkeypatch, beh)
+    assert rr.pick(lambda t: str(tmp_path / "c.jpg"), "p") == ({"best": 1}, "gemini")
+    assert calls == ["gemini-3.8-flash", "gemini-3.5-flash-lite"] and rr.chain == ["gemini"]
+    assert any("FREE tier" in l for l in logs)
+    rr.pick(lambda t: str(tmp_path / "c.jpg"), "p")          # exhausted model is not asked again
+    assert calls[-1] == "gemini-3.5-flash-lite" and len(calls) == 3
+
+
+def test_all_models_out_of_quota_drops_gemini(monkeypatch, tmp_path):
+    def beh(key, model, col, prompt, retry_waits=None):
+        raise llm.QuotaExhausted("q", model=model)
+    rr, logs = make_rr(monkeypatch, beh)
+    assert rr.pick(lambda t: str(tmp_path / "c.jpg"), "p") == (None, None)
+    assert rr.chain == [] and any("rerank stopped" in l for l in logs)

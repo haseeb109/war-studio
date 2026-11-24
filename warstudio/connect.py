@@ -126,8 +126,11 @@ def test_gemini(key):
                     return False, (f"model {model} is overloaded at Google right now (503, temporary). "
                                    f"The tool retries and uses backup models during a run. {str(e)[-120:]}")
                 if isinstance(e, QuotaExhausted):
-                    return False, (f"daily free quota used up for {model}. Turn on billing in AI Studio, "
-                                   f"or wait for the reset (midnight Pacific). {str(e)[-120:]}")
+                    if getattr(e, "free_tier", False):
+                        return False, (f"Google says this key is on the FREE tier and {model}'s free quota is used up. "
+                                       f"Billing is not active for this key's project: in AI Studio -> API keys check the "
+                                       f"key's project/tier, or create a new key in the billed project. {str(e)[-100:]}")
+                    return False, f"quota used up for {model} (paid tier limit). {str(e)[-140:]}"
                 return False, f"model {model}: {str(e)[:200]}"
     if tried:
         wanted = "auto"

@@ -42,6 +42,8 @@ class Reranker:
         self.paused = {}            # provider -> clock time it may be used again
         self.model_busy = {}        # gemini model -> clock time it may be first choice again
         self.fallbacks = []         # gemini fallback models
+        self.exhausted = set()      # gemini models whose quota is used up for this run
+        self.free_tier_warned = False
         self.stats = {"ok": 0, "retried": 0, "fallback_model": 0, "covered_by_other": 0, "clip": 0,
                       "in": 0, "out": 0, "thinking": 0, "by": {}}
         for p in chain_order(settings.get("reranker", "auto"), keys):
@@ -88,10 +90,9 @@ class Reranker:
     def _gemini_models_now(self):
         now = self.clock()
         primary = self.models["gemini"]
-        order = [primary] + [m for m in self.fallbacks if m != primary]
-        if self.model_busy.get(primary, 0) > now:          # primary resting: its fallbacks go first
-            order = [m for m in order if m != primary] + [primary]
-        return order
+        order = [m for m in [primary] + [m for m in self.fallbacks if m != primary] if m not in self.exhausted]
+        # models that are resting (busy a moment ago) go last, so a working backup is asked first
+        return sorted(order, key=lambda m: self.model_busy.get(m, 0) > now)
 
     def _call(self, p, collage, prompt):
         if p == "groq":
@@ -107,13 +108,29 @@ class Reranker:
             except ProviderBusy as e:
                 last = e
                 if self.model_busy.get(m, 0) <= self.clock():
-                    self.log(f"gemini {m} is overloaded right now ({str(e)[-90:]}); trying a backup model")
+                    self.log(f"gemini {m} is overloaded or slow right now ({str(e)[-90:]}); trying a backup model")
                 self.model_busy[m] = self.clock() + MODEL_BUSY_SECONDS
+                continue
+            except QuotaExhausted as e:
+                # quotas are per model: only this model is done, the others keep working
+                self.exhausted.add(m)
+                left = [x for x in [self.models["gemini"], *self.fallbacks] if x not in self.exhausted]
+                self.log(f"gemini {m}: quota used up for this run ({str(e)[-160:]}); "
+                         + (f"continuing with {', '.join(left)}" if left else "no Gemini model left"))
+                if getattr(e, "free_tier", False) and not self.free_tier_warned:
+                    self.free_tier_warned = True
+                    self.log("WARNING: Google says this GEMINI_API_KEY is on the FREE tier - billing is not active for "
+                             "the project this key belongs to. In AI Studio -> API keys, check the key's project shows "
+                             "a paid tier; if not, create a new key inside the billed project and paste it in Settings.")
+                last = e
                 continue
             if m != self.models["gemini"]:
                 self.stats["fallback_model"] += 1
             self._count(p, usage)
             return res
+        if isinstance(last, QuotaExhausted) and not self._gemini_models_now():
+            raise QuotaExhausted("every Gemini model's quota is used up" +
+                                 (" (FREE tier key)" if self.free_tier_warned else ""))
         raise ProviderBusy(f"every Gemini model is busy ({str(last)[-120:] if last else ''})")
 
     def _count(self, p, usage, groq=False):
