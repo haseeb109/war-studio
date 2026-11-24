@@ -59,6 +59,39 @@ def _run_apply(proj):
 threading.Thread(target=_worker, daemon=True).start()
 
 
+# ---------------------------------------------------------------- shot library
+class LibBuild(BaseModel):
+    target: int = 1000
+    per_video: int = 4
+    categories: list[str] = []
+
+
+@app.get("/api/library")
+def library_info():
+    from . import library
+    return {"stats": library.stats(load_settings()), "job": library.job_status(),
+            "categories": [c[0] for c in library.DEFAULT_CATEGORIES]}
+
+
+@app.post("/api/library/build")
+def library_build(b: LibBuild):
+    from . import library
+    if not load_keys().get("DVIDS_API_KEY"):
+        raise HTTPException(400, "DVIDS_API_KEY is needed to build the library - add it in Settings")
+    if b.target < 10:
+        raise HTTPException(400, "target must be at least 10 shots")
+    try:
+        return library.start_build(b.target, b.categories or None, b.per_video)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/library/stop")
+def library_stop():
+    from . import library
+    return library.stop_build()
+
+
 # ---------- models ----------
 
 class Keys(BaseModel):
@@ -213,12 +246,13 @@ def new_job(j: NewJob):
         raise HTTPException(400, "script is empty")
     from .steps.search import SOURCES, source_ready
     from .config import load_keys, load_settings
-    bad = [s for s in j.sources if s not in SOURCES]
+    bad = [s for s in j.sources if s not in SOURCES and s != "library"]
     if bad:
         raise HTTPException(400, f"unknown footage source: {', '.join(bad)}")
-    if j.sources:
-        keys, settings = load_keys(), dict(load_settings(), **{f"use_{s}": True for s in j.sources})
-        if not any(source_ready(s, keys, settings) for s in j.sources):
+    online = [s for s in j.sources if s != "library"]
+    if online and "library" not in j.sources:
+        keys, settings = load_keys(), dict(load_settings(), **{f"use_{s}": True for s in online})
+        if not any(source_ready(s, keys, settings) for s in online):
             raise HTTPException(400, "none of the selected footage sources has an API key — add it in Settings")
     proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources)
     JOBS.put((proj, None))

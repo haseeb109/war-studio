@@ -116,6 +116,14 @@ def run_project(proj, from_step=None):
         total = round(sum(timings.values()), 1)
         log.set(state="done", step=None, progress=1, run_finished=time.time(), total_seconds=total,
                 last_run_seconds=round(time.time() - t0, 1))
+        if not dummy and str(settings.get("library_learn", True)).lower() not in ("false", "0", "no"):
+            try:
+                from .library import Builder
+                n_new = Builder(keys, settings, log).learn_from_project(proj)
+                if n_new:
+                    log(f"library: +{n_new} shots learned from this video (Gemini score 7+, clean)")
+            except Exception as e:
+                log(f"library: learning skipped ({str(e)[:120]})")
         log(f"DONE in {fmt_duration(time.time() - t0)}" + (f" (all steps together: {fmt_duration(total)})"
                                                            if abs(total - (time.time() - t0)) > 5 else "") + " -> final.mp4")
     except Exception as e:

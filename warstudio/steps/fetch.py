@@ -121,12 +121,13 @@ def run_step(proj, keys, style, log, settings=None):
             resolve_dvids(p, keys.get("DVIDS_API_KEY"))
         k = f"{p['source']}:{p['id']}"
         forced = p.get("forced_start") is not None
-        attempts = 1 if forced or mode == "off" or not _long(p, need) else 1 + RETRY_OFFSETS
+        lib = p["source"] == "library"          # library shots were checked when they were added
+        attempts = 1 if forced or lib or mode == "off" or not _long(p, need) else 1 + RETRY_OFFSETS
         best = None
         for a in range(attempts):
             res = cut_one(p, k, need, forced)
             chk = {"problems": [], "crop_bottom": 0.0}
-            if not forced and mode != "off":
+            if not forced and not lib and mode != "off":
                 chk = check_segment(res["file"], res["length"], mode, rr)
             res.update(problems=chk.get("problems", []), crop_bottom=chk.get("crop_bottom", 0.0))
             if not res["problems"]:
@@ -205,6 +206,13 @@ def run_step(proj, keys, style, log, settings=None):
     if switched:                                  # keep picks.json in line with what was really used
         picks.update(switched)
         write_json(proj / "picks.json", picks)
+    try:
+        from ..library import record_uses
+        n_lib = record_uses(proj, fetched, settings)
+        if n_lib:
+            log(f"library: {n_lib} shots used in this video (use count updated)")
+    except Exception as e:
+        log(f"library: could not record uses ({str(e)[:100]})")
     unclean = [b for b, v in fetched.items() if v and v.get("problems")]
     cropped = sum(1 for v in fetched.values() if v and v.get("crop_bottom"))
     if mode != "off":

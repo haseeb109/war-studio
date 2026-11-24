@@ -132,6 +132,7 @@ def title_adjust(title):
 def adjusted_score(c):
     s = c.get("clip_score_raw", c.get("clip_score", 0)) + TIER_BONUS.get(c.get("tier"), 0.0)
     s += title_adjust(c.get("title"))
+    s -= float(c.get("lib_penalty") or 0)          # library shot used in other videos recently
     if num(c.get("duration")) > REEL_SECONDS and c.get("tier") != "exact":
         s -= REEL_PENALTY
     if c.get("scene_reuse"):
@@ -213,6 +214,8 @@ def run_step(proj, keys, settings, style, log):
         bid = str(b["id"])
         cl = [dict(c) for c in _cap_candidates(cands.get(bid, []) or [])]
         for c in cl:
+            if c.get("source") == "library":       # library shots carry their own keyframe on disk
+                continue
             c["preview_file"] = str(pdir / f"{c['source']}_{c['id'].replace(':', '_')}.jpg")
         pool[bid] = cl
     need = {c["preview_file"]: c["preview_url"] for cl in pool.values() for c in cl
@@ -246,7 +249,12 @@ def run_step(proj, keys, settings, style, log):
     conc = max(1, int(settings.get("rerank_concurrency", 8)))
     lock = threading.Lock()
     done_n = [0]
-    jobs = [b for b in todo if len(tops.get(str(b["id"]), [])) > 1]
+    # library beats are matched already (CLIP + named-system rule + captions): no paid rerank for them
+    lib_beats = {str(b["id"]) for b in todo if tops.get(str(b["id"])) and
+                 all(c.get("source") == "library" for c in tops[str(b["id"])])}
+    if lib_beats:
+        log(f"{len(lib_beats)} beats come from the library: no rerank call for them")
+    jobs = [b for b in todo if len(tops.get(str(b["id"]), [])) > 1 and str(b["id"]) not in lib_beats]
 
     def rerank_one(b):
         bid = str(b["id"])
@@ -290,7 +298,7 @@ def run_step(proj, keys, settings, style, log):
     recent = []       # (time, source_key, scene)
     scene_picks = {}  # scene -> winners in that scene
     keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit",
-            "clip_score", "query", "tier", "scene_reuse", "license", "min_start")
+            "clip_score", "query", "tier", "scene_reuse", "license", "min_start", "lib_penalty")
     for b in beats:
         bid = str(b["id"])
         sp = specs[b["id"]]
@@ -356,7 +364,8 @@ def run_step(proj, keys, settings, style, log):
     write_json(out_path, picks)
 
     mix = Counter((v or {}).get("source", "none") for v in picks.values())
-    by_ = Counter((v or {}).get("rerank_by", "clip") for v in picks.values() if v)
+    by_ = Counter(("library" if (v or {}).get("source") == "library" else (v or {}).get("rerank_by", "clip"))
+                  for v in picks.values() if v)
     log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by_.most_common()))
     if rr.chain or rr.stats["ok"]:
         log(rr.summary())

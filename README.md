@@ -128,3 +128,22 @@ After every cut, WarStudio checks the actual segment (not the search thumbnail):
 - Gemini thinking `minimal` (falls to `low` on models without it) - fewer billed thinking tokens, faster answers.
 - Render: 4 segments at a time (`render_concurrency`), 5 HyperFrames overlays at a time.
 - Search 6 beats at a time, specs 6 chunks at a time, fetch 8 clips at a time.
+
+## Shot library (v0.8.0)
+
+**Library tab** -> pick categories, total shots (e.g. 1000), shots per DVIDS video (4) -> **Build / top up**.
+Leave it running overnight; it resumes where it stopped (Stop button, crash or restart).
+
+Per DVIDS video: small preview file (360-480p) -> ffmpeg scene cuts -> 3-8 s candidate shots (no opening slate,
+no end credits) -> clean check on the preview (black, blank card, colour bars, Apple Vision text and faces) ->
+the clean ones are cut **once** in 1080p from the full-quality file -> keyframe -> CLIP vector -> one caption
+from the vision model (~$0.002 per shot; `library_captions: off` for none). Stored in `library/shots/`
+(`library_dir`), index in `index.db`. Stops at 15 GB free disk or `library_max_gb` (200).
+
+Every video ("My Library (first)" on the Create page):
+- each beat is matched against the library: CLIP(visual line) vs shot vectors, **a beat that names a system only
+  gets shots of that system**, caption words add a little, shots used in other videos this week score lower;
+- a match >= `library_min_clip` (0.24) = library clip: no online search, **no Gemini call**;
+- the rest go online (DVIDS etc.) with the Gemini rerank as before;
+- uses are counted per shot; online clips Gemini scored 7+ that passed the clean check join the library
+  (`library_learn`), so the library grows with every video at no extra cost.

@@ -199,6 +199,37 @@ def order_for(fc, style):
     return order
 
 
+def library_first(specs, done, settings, log):
+    """Match every beat against the local shot library. A good match fills the beat's candidates from the
+    library only (no online search, no Gemini rerank for that beat). Returns how many beats matched."""
+    try:
+        from ..library import LibraryIndex, clip_text_vecs
+        idx = LibraryIndex(settings)
+    except Exception as e:
+        log(f"library: not used ({str(e)[:120]})")
+        return 0
+    if not len(idx):
+        log("library: empty - every beat goes online (build it on the Library page)")
+        return 0
+    thr = float(settings.get("library_min_clip", 0.24))
+    todo = [sp for sp in specs if not done.get(str(sp["id"]))]
+    if not todo:
+        return 0
+    texts = [(sp.get("visual") or " ".join(sp.get("queries") or [])[:200] or "military").strip() for sp in todo]
+    vecs = clip_text_vecs(settings, texts)
+    hits = 0
+    for sp, v, t in zip(todo, vecs, texts):
+        if sp.get("footage_class") == "map":
+            continue
+        res = idx.match(v, sp.get("entity") or "", t, k=8)
+        if res and res[0]["clip_sim"] >= thr:
+            done[str(sp["id"])] = res
+            hits += 1
+    log(f"library: {hits}/{len(todo)} beats matched from {len(idx)} shots (no online search, no Gemini for these)"
+        + (f"; {len(todo) - hits} go online" if hits < len(todo) else ""))
+    return hits
+
+
 def run_step(proj, keys, settings, style, log):
     proj = Path(proj)
     out_path = proj / "candidates.json"
@@ -206,7 +237,18 @@ def run_step(proj, keys, settings, style, log):
     specs = read_json(proj / "specs.json")
     n = int(settings.get("candidates_per_query", 12))
     down = set()
-    chosen = [s for s in (settings.get("job_sources") or []) if s in SOURCES]
+    picked = list(settings.get("job_sources") or [])
+    use_library = (not picked or "library" in picked) and str(settings.get("use_library", True)).lower() not in ("false", "0", "no")
+    lib_hits = library_first(specs, done, settings, log) if use_library else 0
+    if picked == ["library"]:
+        # this video uses only the library: beats without a library match keep the previous clip
+        write_json(out_path, done)
+        empty = sum(1 for sp in specs if not done.get(str(sp["id"])))
+        log(f"search done (library only); {empty} beats without a library match")
+        if specs and empty == len(specs):
+            raise RuntimeError("the library has no match for any beat - build the library first or pick online sources")
+        return done
+    chosen = [s for s in picked if s in SOURCES]
     if chosen:
         # sources picked for this video on the Create page; a picked no-key source counts as switched on
         settings = dict(settings, **{f"use_{s}": True for s in chosen})
@@ -216,7 +258,7 @@ def run_step(proj, keys, settings, style, log):
             log(f"selected source(s) without an API key, skipped: {', '.join(skipped)}")
     else:
         active = [s for s in SOURCES if source_ready(s, keys, settings)]
-    if not active:
+    if not active and not lib_hits:
         raise RuntimeError("No footage source available (DVIDS / Pexels / Pixabay keys, or Wikimedia Commons) — check Settings")
     log(f"searching footage on: {', '.join(active)}")
     import threading

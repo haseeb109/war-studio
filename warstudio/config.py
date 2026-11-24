@@ -53,7 +53,14 @@ DEFAULT_SETTINGS = {
     "candidates_per_query": 12,
     "rerank_top_k": 5,
     "rerank_concurrency": 8,
-    "render_concurrency": 4,     # video segments encoded at the same time     # beats reranked at the same time (paid Gemini handles this easily)
+    "render_concurrency": 4,
+    "use_library": True,         # match beats against the local shot library before searching online
+    "library_dir": "",           # empty = <WarStudio>/library/shots
+    "library_max_gb": 200,
+    "library_min_clip": 0.24,    # CLIP similarity a library shot needs to be used without online search
+    "library_shots_per_video": 4,
+    "library_captions": "auto",  # auto = caption new shots once with the reranker model (Gemini/Groq); off
+    "library_learn": True,       # good online clips of each finished video join the library     # video segments encoded at the same time     # beats reranked at the same time (paid Gemini handles this easily)
     "music_file": "",
     "encoder": "auto",
     "hyperframes": True,
