@@ -95,23 +95,121 @@ def resolve_gemini_model(key, wanted="auto"):
     return best
 
 
-def gemini_pick(key, model, image_path, prompt, timeout=90):
-    """Send one collage image + prompt to Gemini, expect JSON back."""
+class ProviderBusy(LLMError):
+    """Temporary trouble on the provider side (503 high demand, 500, timeout). Not our fault, not permanent:
+    retry later or use another model/provider for now."""
+
+
+# per-model request options that the model rejected once (400) - not sent again in this session
+_GEMINI_NO_OPT = {}
+GEMINI_TIMEOUT = 45
+GEMINI_RETRY_WAITS = (2.0, 5.0)        # 503/500/timeouts: two quick retries, then the caller falls back
+GEMINI_MAX_RPM_WAIT = 60               # a per-minute 429 shorter than this is waited out
+
+
+def _gemini_retry_delay(r):
+    """Seconds from a 429's RetryInfo ('17s') or Retry-After header; 0 if none."""
+    try:
+        for det in (r.json().get("error", {}).get("details") or []):
+            d = det.get("retryDelay")
+            if d:
+                return float(str(d).rstrip("s"))
+    except Exception:
+        pass
+    return _retry_after(r)
+
+
+def _is_daily_quota(r):
+    t = r.text.lower()
+    return any(x in t for x in ("perday", "per day", "per_day", "requests_per_day", "daily"))
+
+
+def gemini_body(img_b64, prompt, opts):
+    gc = {"response_mime_type": "application/json", "temperature": 0.1}
+    if "thinking" in opts:
+        # scoring 5 tiles needs no long reasoning: 'low' works on every Gemini 3.x Flash (3.8 has no 'minimal')
+        gc["thinkingConfig"] = {"thinkingLevel": "low"}
+    if "media" in opts:
+        gc["mediaResolution"] = "MEDIA_RESOLUTION_MEDIUM"     # 560 instead of 1,120 tokens per image
+    return {"contents": [{"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}, {"text": prompt}]}],
+            "generationConfig": gc}
+
+
+def gemini_pick(key, model, image_path, prompt, timeout=GEMINI_TIMEOUT, retry_waits=GEMINI_RETRY_WAITS, sleep=None):
+    """Send one collage image + prompt to Gemini, expect JSON back. Returns (json, usage).
+
+    503 / 500 / timeouts -> quick retries, then ProviderBusy.  429 per minute -> waits the server's delay.
+    429 per day -> QuotaExhausted.  404 -> ModelGone.  A 400 about thinking/media options -> sent again
+    without that option (remembered)."""
+    import time as _t
+    sleep = sleep or _t.sleep
     if not key:
         raise LLMError("GEMINI_API_KEY missing")
     img = base64.b64encode(open(image_path, "rb").read()).decode()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-    body = {"contents": [{"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": img}}, {"text": prompt}]}],
-            "generationConfig": {"response_mime_type": "application/json", "temperature": 0.1}}
-    r = httpx.post(url, json=body, timeout=timeout)
-    if r.status_code == 404:
-        _GONE.add(model)
-        raise ModelGone(f"gemini model '{model}' " + _one_line_error(r))
-    if r.status_code >= 400:
-        raise LLMError("gemini " + _one_line_error(r))
-    d = r.json()
-    text = d["candidates"][0]["content"]["parts"][0]["text"]
-    return extract_json(text), d.get("usageMetadata") or {}
+    retries, waits = 0, list(retry_waits)
+    while True:
+        opts = {"thinking", "media"} - _GEMINI_NO_OPT.get(model, set())
+        try:
+            r = httpx.post(url, json=gemini_body(img, prompt, opts), timeout=timeout)
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            if waits:
+                sleep(waits.pop(0))
+                retries += 1
+                continue
+            raise ProviderBusy(f"gemini {model}: network/timeout ({type(e).__name__})")
+        if r.status_code == 400 and opts:
+            low = r.text.lower()
+            bad = {o for o, words in (("thinking", ("thinking",)), ("media", ("media", "resolution"))) if o in opts
+                   and any(w in low for w in words)}
+            if bad:
+                _GEMINI_NO_OPT.setdefault(model, set()).update(bad)
+                continue
+        if r.status_code == 404:
+            _GONE.add(model)
+            raise ModelGone(f"gemini model '{model}' " + _one_line_error(r))
+        if r.status_code == 429:
+            delay = _gemini_retry_delay(r)
+            if _is_daily_quota(r) or delay > GEMINI_MAX_RPM_WAIT:
+                raise QuotaExhausted("gemini " + _one_line_error(r))
+            if retries < 4:
+                sleep((delay or 10) + 0.5)
+                retries += 1
+                continue
+            raise ProviderBusy("gemini still rate limited: " + _one_line_error(r))
+        if r.status_code in (500, 502, 503, 504):
+            if waits:
+                sleep(waits.pop(0))
+                retries += 1
+                continue
+            raise ProviderBusy(f"gemini {model} " + _one_line_error(r))
+        if r.status_code >= 400:
+            raise LLMError("gemini " + _one_line_error(r))
+        d = r.json()
+        try:
+            parts = d["candidates"][0]["content"]["parts"]
+            text = next(p["text"] for p in parts if "text" in p and not p.get("thought"))
+        except (KeyError, IndexError, StopIteration):
+            raise LLMError(f"gemini {model}: empty answer ({str(d.get('candidates') or d)[:120]})")
+        usage = dict(d.get("usageMetadata") or {}, _retries=retries, _model=model)
+        return extract_json(text), usage
+
+
+def gemini_fallback_models(key, primary, n=2):
+    """Other models to use while `primary` is overloaded: the next stable flash, then flash-lite."""
+    names = [m for m in gemini_models(key) if m != primary and m not in _GONE]
+    bad = ("tts", "image", "live", "audio", "embedding", "native", "computer", "preview", "exp")
+
+    def ver(m):
+        x = re.search(r"gemini-(\d+(?:\.\d+)?)", m)
+        return float(x.group(1)) if x else 0.0
+    ok = [m for m in names if "flash" in m and not any(b in m for b in bad)]
+    full = sorted([m for m in ok if "lite" not in m], key=ver, reverse=True)
+    lite = sorted([m for m in ok if "lite" in m], key=ver, reverse=True)
+    out = full[:1] + lite[:1]
+    if "gemini-flash-latest" not in (primary, *out) and "gemini-flash-latest" in names:
+        out.insert(0, "gemini-flash-latest")
+    return out[:n]
 
 
 # ---------------------------------------------------------------- Groq (clip rerank only)
@@ -184,6 +282,11 @@ def groq_pick(key, model, image_path, prompt, timeout=90, sleep=None, max_wait=7
             continue
         if r.status_code == 404:
             raise ModelGone(f"groq model '{model}' " + _one_line_error(r))
+        if r.status_code in (500, 502, 503, 504):
+            if attempt < 1:
+                sleep(3)
+                continue
+            raise ProviderBusy(f"groq {model} " + _one_line_error(r))
         if r.status_code >= 400:
             raise LLMError("groq " + _one_line_error(r))
         d = r.json()

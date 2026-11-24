@@ -107,3 +107,15 @@ After every cut, WarStudio checks the actual segment (not the search thumbnail):
    Burned-in text, subtitles, title cards, banners or a talking head -> another moment of the same long video is tried (2 more), then the next ranked alternate (up to 4 clips). If nothing is clean, the least-bad clip is used and the Review editor flags it `unclean: ...`.
 3. **Slates, black, end credits** - start after the DVIDS `time_start`, never in the last 5% (max 8 s) of long videos, black/blank/colour-bar cuts rejected.
 4. **Lower-third crop** - a name strip in the bottom ~16% alone is not a rejection: render zooms in from the top so it leaves the frame.
+
+## Gemini rerank: overload handling and cost
+
+- **503 "high demand" / 500 / timeouts** are temporary: 2 quick retries (2 s, 5 s), then the same collage goes to a
+  backup model (the next stable Flash, then Flash-Lite). If every model is busy, Gemini is **paused for 60 s**
+  (Groq or CLIP covers those beats) and then used again - it is never switched off for the whole run because of 503s.
+- **429 per minute**: the server's retry delay is waited out. **429 per day** (free quota): Gemini stops for the run.
+- Real errors (bad request) stop it only after 5 in a row.
+- Requests use `thinkingLevel: low` and medium image resolution (560 instead of 1,120 image tokens). If a model
+  rejects either option it is sent again without it.
+- The log ends the rank step with real usage: calls, retries, backup-model uses, tokens and the Gemini cost
+  (`gemini_price_in_per_m` / `gemini_price_out_per_m` in Settings).

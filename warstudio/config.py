@@ -41,6 +41,8 @@ DEFAULT_SETTINGS = {
     "brain_price_in_per_m": 0.30,
     "brain_price_out_per_m": 1.20,
     "gemini_model": "auto",
+    "gemini_price_in_per_m": 0.75,    # $ per 1M input tokens, paid tier (Gemini 3.x Flash; $1.50 from 2027-01-01)
+    "gemini_price_out_per_m": 3.75,   # $ per 1M output+thinking tokens ($7.50 from 2027-01-01)
     "reranker": "auto",          # auto = Groq if its key is set, else Gemini, else CLIP only; or groq / gemini / clip
     "groq_vision_model": "auto",
     "segment_check": "auto",     # auto = pixels + Apple Vision text/face check on Mac | vlm = also the vision model | off

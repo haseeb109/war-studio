@@ -253,6 +253,8 @@ def run_step(proj, keys, settings, style, log):
     mix = Counter((v or {}).get("source", "none") for v in picks.values())
     by = Counter((v or {}).get("rerank_by", "clip") for v in picks.values() if v)
     log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by.most_common()))
+    if rr.chain or rr.stats["ok"]:
+        log(rr.summary())
     tiers = Counter(("reuse" if (v or {}).get("scene_reuse") else (v or {}).get("tier", "?")) for v in picks.values() if v)
     log("match level: " + ", ".join(f"{a} {b}" for a, b in tiers.most_common()))
     log(f"rank done; {sum(1 for v in picks.values() if not v)} beats without a pick; picks per source: " +

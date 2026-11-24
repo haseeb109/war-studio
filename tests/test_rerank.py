@@ -53,6 +53,7 @@ def test_groq_daily_quota_raises(tmp_path, monkeypatch):
 def test_reranker_falls_back_to_gemini_when_groq_quota_gone(monkeypatch, tmp_path):
     monkeypatch.setattr(rerank, "resolve_groq_model", lambda k, w: "qwen/qwen3.6-27b")
     monkeypatch.setattr(rerank, "resolve_gemini_model", lambda k, w: "gemini-flash-latest")
+    monkeypatch.setattr(rerank, "gemini_fallback_models", lambda k, p: [])
 
     def groq(*a, **kw):
         raise llm.QuotaExhausted("TPD")
@@ -68,10 +69,12 @@ def test_reranker_falls_back_to_gemini_when_groq_quota_gone(monkeypatch, tmp_pat
     assert any("groq rerank stopped" in l for l in logs)
 
 
-def test_reranker_drops_after_three_failures(monkeypatch, tmp_path):
+def test_reranker_drops_after_five_real_failures(monkeypatch, tmp_path):
     monkeypatch.setattr(rerank, "resolve_groq_model", lambda k, w: "m")
     monkeypatch.setattr(rerank, "groq_pick", lambda *a, **kw: (_ for _ in ()).throw(llm.LLMError("bad")))
     rr = rerank.Reranker({"GROQ_API_KEY": "g"}, {"reranker": "groq"}, lambda m: None)
-    for _ in range(3):
+    for _ in range(4):
         assert rr.pick(lambda t: str(tmp_path / "c.jpg"), "p") == (None, None)
+    assert rr.active == "groq"
+    assert rr.pick(lambda t: str(tmp_path / "c.jpg"), "p") == (None, None)
     assert rr.active is None

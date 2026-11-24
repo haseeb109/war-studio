@@ -121,6 +121,13 @@ def test_gemini(key):
                 except Exception as e:
                     return False, f"no working flash model ({', '.join(tried)} gave 404): {str(e)[:120]}"
             except Exception as e:
+                from .llm import ProviderBusy, QuotaExhausted
+                if isinstance(e, ProviderBusy):
+                    return False, (f"model {model} is overloaded at Google right now (503, temporary). "
+                                   f"The tool retries and uses backup models during a run. {str(e)[-120:]}")
+                if isinstance(e, QuotaExhausted):
+                    return False, (f"daily free quota used up for {model}. Turn on billing in AI Studio, "
+                                   f"or wait for the reset (midnight Pacific). {str(e)[-120:]}")
                 return False, f"model {model}: {str(e)[:200]}"
     if tried:
         wanted = "auto"
@@ -129,7 +136,16 @@ def test_gemini(key):
     note = "" if wanted in ("auto", model) else f" ('{wanted}' not available, using this instead)"
     if tried:
         note += f" (retired for this key: {', '.join(tried)})"
-    return True, f"key OK · rerank model {model}{note} · test answer: {res.get('color', res)}"
+    from .llm import _GEMINI_NO_OPT, gemini_fallback_models
+    opts = {"thinking", "media"} - _GEMINI_NO_OPT.get(model, set())
+    try:
+        backups = ", ".join(gemini_fallback_models(key, model)) or "none"
+    except Exception:
+        backups = "?"
+    return True, (f"key OK · rerank model {model}{note} · backups: {backups} · thinking "
+                  f"{'low' if 'thinking' in opts else 'model default'}, image "
+                  f"{'medium res' if 'media' in opts else 'default res'} · tokens in {usage.get('promptTokenCount', '?')}, "
+                  f"thinking {usage.get('thoughtsTokenCount', 0)} · test answer: {res.get('color', res)}")
 
 
 def test_pexels(key):
