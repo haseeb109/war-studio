@@ -172,3 +172,8 @@ Every video ("My Library (first)" on the Create page):
 - **Captions on Flash-Lite** (`library_caption_model: lite`, about half the price).
 - **Daily backup** of `index.db` in `library/shots/backups/` (last 7 days).
 - **720p minimum**: DVIDS videos below 720p are skipped; learned clips from sub-720p sources too.
+
+## Pacing rule (locked, v0.8.3)
+No shot stays on screen longer than **3 s** (`max_shot_seconds`), counting the pause before the next sentence:
+sentences are cut at clause words / spaces, slivers under 1 s are merged, and a piece that still runs long
+(few words, long pause) is split in time with the same words so the picture changes. Average ~2 s.

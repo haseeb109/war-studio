@@ -7,11 +7,11 @@
   "canvas": {"width": 1920, "height": 1080, "fps": 30},
 
   "pacing": {
-    "_note": "Observed ASL 2.2-3.5 s, min ~0.8 s, max ~6-7 s. Cuts land on sentence start or on the named noun mid-sentence.",
+    "_note": "Observed ASL 2.2-3.5 s, min ~0.8 s, max ~6-7 s. Cuts land on sentence start or on the named noun mid-sentence. LOCKED (user rule): a new shot every 2-3 s, never more than 3 s on screen.",
     "intro_seconds": 180,
     "intro_split_min_seconds": 3.2,
-    "max_shot_seconds": 6.0,
-    "min_shot_seconds": 0.9,
+    "max_shot_seconds": 3.0,
+    "min_shot_seconds": 1.0,
     "split_long_beats_everywhere": true
   },
 

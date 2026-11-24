@@ -21,15 +21,27 @@ def test_split_sentences_keeps_abbreviations_and_numbers():
 def test_beats_split_intro_and_long_sentences_without_breaking_numbers():
     sents = [{"sid": 0, "text": "Behind it, a pair of F-15E Strike Eagles hold at 28,000 feet, waiting for targets.", "start": 0, "end": 5.0},
              {"sid": 1, "text": "Short one.", "start": 5.0, "end": 6.0},
-             {"sid": 2, "text": " ".join(["word"] * 40) + ".", "start": 200, "end": 214}]
-    b = beats.make_beats(sents, STYLE)
+             {"sid": 2, "text": " ".join(["word"] * 40) + ".", "start": 6.4, "end": 20.4}]
+    b = beats.make_beats(sents, STYLE, total=21.0)
     assert b[0]["text"].startswith("Behind it")
     assert all("28," not in x["text"] or "28,000" in x["text"] for x in b)
     assert len([x for x in b if x["sid"] == 0]) == 2
     assert len([x for x in b if x["sid"] == 1]) == 1
     long = [x for x in b if x["sid"] == 2]
-    assert len(long) >= 3 and all(x["end"] - x["start"] <= STYLE["pacing"]["max_shot_seconds"] for x in long)
-    assert b[-1]["end"] == 214
+    assert len(long) >= 5
+    # LOCKED rule: on screen (until the next beat, pause included) never longer than 3 s
+    on = [(b[i + 1]["start"] if i + 1 < len(b) else 21.0) - x["start"] for i, x in enumerate(b)]
+    assert max(on) <= STYLE["pacing"]["max_shot_seconds"] + 1e-6 == 3.0 + 1e-6
+    assert min(on) >= STYLE["pacing"]["min_shot_seconds"] - 1e-6
+
+
+def test_long_pause_or_few_words_still_changes_picture():
+    sents = [{"sid": 0, "text": "Silence.", "start": 0, "end": 1.0}, {"sid": 1, "text": "Then it came.", "start": 7.0, "end": 8.5}]
+    b = beats.make_beats(sents, STYLE, total=9.0)
+    first = [x for x in b if x["sid"] == 0]
+    assert len(first) >= 3 and all(x["text"] == "Silence." for x in first) and first[1].get("cont")
+    on = [(b[i + 1]["start"] if i + 1 < len(b) else 9.0) - x["start"] for i, x in enumerate(b)]
+    assert max(on) <= 3.0 + 1e-6
 
 
 @pytest.mark.parametrize("text,l1,l2", [

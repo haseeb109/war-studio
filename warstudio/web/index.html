@@ -506,6 +506,12 @@ async function lbFind(more) {
   $("#lbCount").textContent = `${d.total} shots`;
   $("#lbMore").classList.toggle("hidden", LB_OFF >= d.total);
 }
+// remember the build fields (total shots, shots per video, GB limit) between visits
+["lbTarget", "lbPer", "lbGb"].forEach(id => {
+  const el = $("#" + id);
+  try { const v = localStorage.getItem("ws_" + id); if (v) el.value = v; } catch (e) {}
+  el.addEventListener("change", () => { try { localStorage.setItem("ws_" + id, el.value); } catch (e) {} });
+});
 $("#lbFind").onclick = () => lbFind(false);
 $("#lbMore").onclick = () => lbFind(true);
 $("#lbQ").addEventListener("keydown", e => { if (e.key === "Enter") lbFind(false); });
