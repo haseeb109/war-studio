@@ -25,7 +25,7 @@ def test_beats_split_intro_and_long_sentences_without_breaking_numbers():
     b = beats.make_beats(sents, STYLE)
     assert b[0]["text"].startswith("Behind it")
     assert all("28," not in x["text"] or "28,000" in x["text"] for x in b)
-    assert len([x for x in b if x["sid"] == 0]) == 2
+    assert max(x["end"] - x["start"] for x in b if x["sid"] == 0) <= 2.4 + 1e-6   # hook zone: short shots
     assert len([x for x in b if x["sid"] == 1]) == 1
     long = [x for x in b if x["sid"] == 2]
     assert len(long) >= 3 and all(x["end"] - x["start"] <= STYLE["pacing"]["max_shot_seconds"] for x in long)

@@ -266,8 +266,8 @@ def _click_near(events, t, tol=0.35):
 def set_overlay(proj, bid, kind, line1, line2=""):
     proj = Path(proj)
     _check_idle(proj)
-    if kind not in ("time", "measure", "label"):
-        raise EditError("kind must be time, measure or label")
+    if kind not in ("time", "measure", "label", "hook"):
+        raise EditError("kind must be time, measure, label or hook")
     if not line1.strip():
         raise EditError("callout text is empty")
     d = _load(proj)

@@ -8,7 +8,11 @@
 
   "pacing": {
     "_note": "Observed ASL 2.2-3.5 s, min ~0.8 s, max ~6-7 s. Cuts land on sentence start or on the named noun mid-sentence.",
-    "intro_seconds": 180,
+    "hook_chars": 1000,
+  "hook_max_shot_seconds": 2.4,
+  "hook_min_shot_seconds": 0.9,
+  "hook_overlay_min_gap_seconds": 0.0,
+  "intro_seconds": 180,
     "intro_split_min_seconds": 3.2,
     "max_shot_seconds": 6.0,
     "min_shot_seconds": 0.9,

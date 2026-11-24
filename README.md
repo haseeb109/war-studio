@@ -107,3 +107,13 @@ After every cut, WarStudio checks the actual segment (not the search thumbnail):
    Burned-in text, subtitles, title cards, banners or a talking head -> another moment of the same long video is tried (2 more), then the next ranked alternate (up to 4 clips). If nothing is clean, the least-bad clip is used and the Review editor flags it `unclean: ...`.
 3. **Slates, black, end credits** - start after the DVIDS `time_start`, never in the last 5% (max 8 s) of long videos, black/blank/colour-bar cuts rejected.
 4. **Lower-third crop** - a name strip in the bottom ~16% alone is not a rejection: render zooms in from the top so it leaves the frame.
+
+## Hook (first ~1000 characters)
+
+The first minute decides retention, so the sentences that start inside the first `hook_chars` (1000) characters get:
+
+- **Fast cuts** - every sentence is cut into shots of at most 2.4 s (min 0.9 s); after the hook the normal pacing returns.
+- **More clips, no repeats** - 1.5x more search candidates, the reranker compares 8 instead of 5, and no clip is used twice in the hook.
+- **Animated tactical captions** - the brain writes a short HUD-style `hook_text` (e.g. `TARGET: MOBILE CONVOY`) for about 2 of 3 hook beats, using only facts from the script. Rendered bottom-left with HyperFrames: "INTEL" tag, type-on text, scan line, blinking cursor. Time/measure boxes and ID labels still take priority.
+
+Automatic sound effects are **off** by default for now (`sfx` setting); SFX added by hand in the Review editor still play.

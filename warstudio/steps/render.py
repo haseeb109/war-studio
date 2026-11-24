@@ -57,6 +57,12 @@ def loudnorm_filter(wav, lufs):
                        capture_output=True, text=True)
     try:
         m = json.loads(p.stderr[p.stderr.rindex("{"):p.stderr.rindex("}") + 1])
+        try:
+            silent = float(m["input_i"]) < -70
+        except (TypeError, ValueError):
+            silent = True                     # "-inf": a silent track (dry run with SFX off)
+        if silent:
+            return "anull"
         return (f"loudnorm=I={lufs}:TP=-1.0:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
                 f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
     except Exception:
@@ -120,11 +126,13 @@ def run_step(proj, settings, style, log, use_hf=True):
     video = proj / "video_only.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(video)])
 
-    log("mixing audio (voice + SFX + music)")
+    auto_sfx = str(settings.get("sfx", False)).lower() in ("true", "1", "yes")
+    log("mixing audio (voice + " + ("SFX + " if auto_sfx else "") + "music)" +
+        ("" if auto_sfx else " - automatic SFX off (Settings: sfx)"))
     sfx.ensure_defaults()
     events = read_json(proj / "sfx_events.json")
     if events is None:
-        events = sfx.plan_events(beats, specs, {int(k) for k in plan}, style)
+        events = sfx.plan_events(beats, specs, {int(k) for k in plan}, style) if auto_sfx else []
         write_json(proj / "sfx_events.json", events)
     mixwav = proj / "mix.wav"
     sfx.mix(proj / "vo.wav", events, total, style, mixwav, settings.get("music_file", ""))
