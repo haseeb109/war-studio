@@ -195,7 +195,7 @@ def run_step(proj, keys, style, log, settings=None):
 
     switched = {}
     log(f"downloading {len(jobs)} clip segments")
-    with ThreadPoolExecutor(6) as ex:
+    with ThreadPoolExecutor(8) as ex:
         for n, (bid, res) in enumerate(ex.map(work, jobs), 1):
             fetched[bid] = res
             if n % 10 == 0 or n == len(jobs):

@@ -154,7 +154,44 @@ def _prompt(beat, spec, n):
             f'Return JSON: {{"scores": [<{n} integers in tile order>], "best": <tile number>}}')
 
 
+MAX_PREVIEWS = 24          # previews per beat that get downloaded + CLIP-scored (search returns ~35-40)
+MIN_PER_TIER = 4           # ...but every search tier (exact / substitute / category) keeps a few seats
+REUSE_IF_BELOW = 6         # in-scene reuse beats the reranked clips only when their best score is under this
+
+
+def _cap_candidates(cl, n=MAX_PREVIEWS, per_tier=MIN_PER_TIER):
+    """Keep the first n candidates in search order (sources return them by relevance), but make sure each tier
+    keeps up to `per_tier`, so the broad-category fallback is never cut away entirely."""
+    if len(cl) <= n:
+        return cl
+    keep = cl[:n]
+    for tier in {c.get("tier") for c in cl}:
+        have = sum(1 for c in keep if c.get("tier") == tier)
+        extra = [c for c in cl[n:] if c.get("tier") == tier][:max(0, per_tier - have)]
+        for c in extra:
+            counts = {}
+            for x in keep:
+                counts[x.get("tier")] = counts.get(x.get("tier"), 0) + 1
+            victim = next((x for x in reversed(keep) if counts[x.get("tier")] > per_tier), None)
+            if victim is None:
+                break
+            keep.remove(victim)
+            keep.append(c)
+    return keep
+
+
+def _key(c):
+    return f"{c['source']}:{c['id']}"
+
+
 def run_step(proj, keys, settings, style, log):
+    """Two phases so the slow network parts run in parallel:
+    A) for every beat at once: download previews (24 at a time), CLIP-score them, and send the top-K collage to the
+       reranker (8 beats at a time).
+    B) walk the timeline in order and choose, using the scores from A: same-clip cooldown across scenes, in-scene
+       reuse, fall back to the next reranked clip when the best one is blocked. No network calls in B."""
+    import threading
+    from collections import Counter
     proj = Path(proj)
     out_path = proj / "picks.json"
     picks = read_json(out_path, {}) or {}
@@ -168,91 +205,159 @@ def run_step(proj, keys, settings, style, log):
     from ..config import save_settings
     rr = Reranker(keys, settings, log, save_settings)
     log(f"ranking with {rr.label}")
-    recent = []  # (time, source_key, scene)
-    scene_picks = {}  # scene -> list of winners in that scene (for reuse)
+    todo = [b for b in beats if str(b["id"]) not in picks]
+
+    # ---------------- phase A1: previews for every beat, all at once
+    pool = {}
+    for b in todo:
+        bid = str(b["id"])
+        cl = [dict(c) for c in _cap_candidates(cands.get(bid, []) or [])]
+        for c in cl:
+            c["preview_file"] = str(pdir / f"{c['source']}_{c['id'].replace(':', '_')}.jpg")
+        pool[bid] = cl
+    need = {c["preview_file"]: c["preview_url"] for cl in pool.values() for c in cl
+            if c.get("preview_url") and not Path(c["preview_file"]).exists()}
+    if need:
+        log(f"downloading {len(need)} previews (24 at a time)")
+        with ThreadPoolExecutor(24) as ex:
+            list(ex.map(lambda kv: _safe_dl(kv[1], kv[0]), need.items()))
+
+    # ---------------- phase A2: CLIP scores (local GPU, fast)
+    tops = {}
+    for b in todo:
+        bid = str(b["id"])
+        sp = specs[b["id"]]
+        cl = [c for c in pool[bid] if Path(c["preview_file"]).exists()]
+        pool[bid] = cl
+        if not cl:
+            continue
+        text = (sp.get("visual") or f"{sp.get('entity', '')} {b['text']}").strip()
+        for c, s_ in zip(cl, clip_scores(settings, text, [c["preview_file"] for c in cl])):
+            title = (c.get("title") or "").lower()
+            if any(a.lower() in title for a in sp.get("avoid") or [] if a):
+                s_ -= 0.05
+            c["clip_score_raw"] = round(s_, 4)
+            c["clip_score"] = round(adjusted_score(c), 4)
+        cl.sort(key=lambda c: -c["clip_score"])
+        tops[bid] = diverse_top(cl, k)
+
+    # ---------------- phase A3: vision rerank, several beats at once
+    reranked = {}           # bid -> (scores list aligned with tops[bid], provider)
+    conc = max(1, int(settings.get("rerank_concurrency", 8)))
+    lock = threading.Lock()
+    done_n = [0]
+    jobs = [b for b in todo if len(tops.get(str(b["id"]), [])) > 1]
+
+    def rerank_one(b):
+        bid = str(b["id"])
+        top = tops[bid]
+        res, by = (None, None)
+        if rr.active:
+            res, by = rr.pick(lambda tile: make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg", tile),
+                              _prompt(b, specs[b["id"]], len(top)), tag=f"beat {bid}: ")
+        if res:
+            scores = res.get("scores") or []
+            try:
+                best = int(res.get("best") or (scores.index(max(scores)) + 1 if scores else 1))
+            except (TypeError, ValueError):
+                best = 1
+            sc = []
+            for x in scores[:len(top)]:
+                try:
+                    sc.append(float(x))
+                except (TypeError, ValueError):
+                    sc.append(None)
+            sc += [None] * (len(top) - len(sc))
+            valid = [x for x in sc if x is not None]
+            if 1 <= best <= len(top):          # the model's own "best" wins over its scores if they disagree
+                if not valid:
+                    sc[best - 1] = 10.0
+                elif sc[best - 1] is None or sc[best - 1] < max(valid):
+                    sc[best - 1] = max(valid) + 0.5
+            with lock:
+                reranked[bid] = (sc, by)
+        with lock:
+            done_n[0] += 1
+            if done_n[0] % 10 == 0 or done_n[0] == len(jobs):
+                log(f"rerank {done_n[0]}/{len(jobs)}", progress=done_n[0] / max(len(jobs), 1))
+
+    if jobs and rr.active:
+        log(f"reranking {len(jobs)} beats, {conc} at a time")
+        with ThreadPoolExecutor(conc) as ex:
+            list(ex.map(rerank_one, jobs))
+
+    # ---------------- phase B: walk the timeline, choose with cooldown + scene reuse (no network)
+    recent = []       # (time, source_key, scene)
+    scene_picks = {}  # scene -> winners in that scene
+    keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit",
+            "clip_score", "query", "tier", "scene_reuse", "license", "min_start")
     for b in beats:
         bid = str(b["id"])
         sp = specs[b["id"]]
         scene = sp.get("scene") or ""
-        if bid in picks:
+        if bid in picks and b not in todo:
             p = picks[bid]
             if p:
-                recent.append((b["start"], f"{p['source']}:{p['id']}", scene))
+                recent.append((b["start"], _key(p), scene))
                 if scene:
                     scene_picks.setdefault(scene, []).append(p)
             continue
-        # cooldown only blocks repeats across DIFFERENT scenes; inside one scene a clip may come back
         blocked = {sk for t, sk, scn in recent if b["start"] - t < cool and not (scene and scn == scene)}
-        cl = [dict(c) for c in cands.get(bid, []) if f"{c['source']}:{c['id']}" not in blocked]
+        scene_uses = Counter(_key(p) for p in scene_picks.get(scene, [])) if scene else Counter()
+        blocked |= {sk for sk, n in scene_uses.items() if n >= SCENE_REUSE_MAX}     # max 3 uses inside one scene
+        top = tops.get(bid) or []
+        sc, by = reranked.get(bid, (None, None))
+        scored = [(c, (sc[i] if sc and i < len(sc) else None)) for i, c in enumerate(top)]
+        options = [(c, s_) for c, s_ in scored if _key(c) not in blocked]
+        # in-scene reuse candidates (strong clips already used in this scene, from another moment)
+        reuse = []
         if scene and scene_picks.get(scene):
-            have = {f"{c['source']}:{c['id']}" for c in cl}
-            uses = {}
-            for p in scene_picks[scene]:
-                k_ = f"{p['source']}:{p['id']}"
-                uses[k_] = uses.get(k_, 0) + 1
+            uses = scene_uses
+            seen = {_key(c) for c, _ in options}
             for p in reversed(scene_picks[scene]):
-                k_ = f"{p['source']}:{p['id']}"
-                if k_ in have or uses[k_] >= SCENE_REUSE_MAX:
+                if _key(p) in seen or uses[_key(p)] >= SCENE_REUSE_MAX or not Path(p.get("preview_file") or "").exists():
                     continue
-                have.add(k_)
-                cl.append({x: v for x, v in p.items() if x not in ("alternates", "gemini_score", "rerank_by")}
-                          | {"scene_reuse": True})
-        if not cl:
+                seen.add(_key(p))
+                reuse.append({x: v for x, v in p.items() if x not in ("alternates", "gemini_score", "rerank_by")}
+                             | {"scene_reuse": True})
+        if reuse:
+            text = (sp.get("visual") or f"{sp.get('entity', '')} {b['text']}").strip()
+            for c, s_ in zip(reuse, clip_scores(settings, text, [c["preview_file"] for c in reuse])):
+                c["clip_score_raw"] = round(s_, 4)
+                c["clip_score"] = round(adjusted_score(c), 4)
+        winner, gscore = None, None
+        rated = [(c, s_) for c, s_ in options if s_ is not None]
+        if rated:
+            c, s_ = max(rated, key=lambda x: x[1])
+            if reuse and s_ < REUSE_IF_BELOW:
+                winner = max(reuse, key=lambda c: c["clip_score"])
+            else:
+                winner, gscore = c, s_
+        else:
+            pool_b = [c for c, _ in options] + reuse
+            if not pool_b:     # every reranked clip is in cooldown: best CLIP clip that is not
+                pool_b = [c for c in (pool.get(bid) or []) if _key(c) not in blocked]
+            if pool_b:
+                winner = max(pool_b, key=lambda c: c["clip_score"])
+        if winner is None:
             picks[bid] = None
             continue
-        jobs = []
-        for c in cl:
-            c["preview_file"] = str(pdir / f"{c['source']}_{c['id'].replace(':', '_')}.jpg")
-            if not Path(c["preview_file"]).exists():
-                jobs.append(c)
-        with ThreadPoolExecutor(8) as ex:
-            list(ex.map(lambda c: _safe_dl(c["preview_url"], c["preview_file"]), jobs))
-        cl = [c for c in cl if Path(c["preview_file"]).exists()]
-        if not cl:
-            picks[bid] = None
-            continue
-        # CLIP compares against the concrete visual line from the master prompt, not the narration
-        text = (sp.get("visual") or f"{sp.get('entity', '')} {b['text']}").strip()
-        sc = clip_scores(settings, text, [c["preview_file"] for c in cl])
-        for c, s in zip(cl, sc):
-            title = (c.get("title") or "").lower()
-            if any(a.lower() in title for a in sp.get("avoid") or [] if a):
-                s -= 0.05
-            c["clip_score_raw"] = round(s, 4)
-            c["clip_score"] = round(adjusted_score(c), 4)
-        top = diverse_top(cl, k)
-        winner, gscore, scores, by = top[0], None, None, None
-        if rr.active and len(top) > 1:
-            res, by = rr.pick(lambda tile: make_collage([c["preview_file"] for c in top], pdir / f"collage_{bid}.jpg", tile),
-                              _prompt(b, sp, len(top)), tag=f"beat {bid}: ")
-            if res:
-                scores = res.get("scores") or []
-                try:
-                    best = int(res.get("best") or (scores.index(max(scores)) + 1 if scores else 1))
-                except (TypeError, ValueError):
-                    best = 1
-                if 1 <= best <= len(top):
-                    winner = top[best - 1]
-                    gscore = scores[best - 1] if len(scores) >= best else None
-        keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit",
-                "clip_score", "query", "tier", "scene_reuse", "license", "min_start")
-        alts = [{x: c.get(x) for x in keep} for c in top]
-        if isinstance(scores, list):
-            for a, s_ in zip(alts, scores):
-                a["gemini_score"] = s_
-        winner = dict(winner, gemini_score=gscore, rerank_by=by or "clip", alternates=alts, scene=scene)
+        alts = [{x: c.get(x) for x in keep} | ({"gemini_score": s_} if s_ is not None else {})
+                for c, s_ in sorted(options, key=lambda x: -(x[1] if x[1] is not None else -1))]
+        alts += [{x: c.get(x) for x in keep} for c, _ in scored if _key(c) in blocked]
+        winner = dict(winner, gemini_score=gscore, rerank_by=(by if gscore is not None else "clip"),
+                      alternates=alts, scene=scene)
+        if scene_uses.get(_key(winner)):
+            winner["scene_reuse"] = True        # same clip again in this scene (fetch cuts another moment)
         picks[bid] = winner
-        recent.append((b["start"], f"{winner['source']}:{winner['id']}", scene))
+        recent.append((b["start"], _key(winner), scene))
         if scene:
             scene_picks.setdefault(scene, []).append(winner)
-        if int(bid) % 10 == 0:
-            write_json(out_path, picks)
-            log(f"rank {int(bid) + 1}/{len(beats)}", progress=(int(bid) + 1) / len(beats))
     write_json(out_path, picks)
-    from collections import Counter
+
     mix = Counter((v or {}).get("source", "none") for v in picks.values())
-    by = Counter((v or {}).get("rerank_by", "clip") for v in picks.values() if v)
-    log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by.most_common()))
+    by_ = Counter((v or {}).get("rerank_by", "clip") for v in picks.values() if v)
+    log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by_.most_common()))
     if rr.chain or rr.stats["ok"]:
         log(rr.summary())
     tiers = Counter(("reuse" if (v or {}).get("scene_reuse") else (v or {}).get("tier", "?")) for v in picks.values() if v)

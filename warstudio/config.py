@@ -52,6 +52,8 @@ DEFAULT_SETTINGS = {
     "clip_pretrained": "laion2b_s34b_b79k",
     "candidates_per_query": 12,
     "rerank_top_k": 5,
+    "rerank_concurrency": 8,
+    "render_concurrency": 4,     # video segments encoded at the same time     # beats reranked at the same time (paid Gemini handles this easily)
     "music_file": "",
     "encoder": "auto",
     "hyperframes": True,

@@ -264,7 +264,7 @@ def run_step(proj, keys, settings, style, log):
     zero = {}  # source -> [queries asked, queries with no result]
 
     todo = [sp for sp in specs if not done.get(str(sp["id"]))]
-    with ThreadPoolExecutor(3) as ex:
+    with ThreadPoolExecutor(6) as ex:
         for i, (bid, cands) in enumerate(ex.map(one, todo), 1):
             done[bid] = cands
             if i % 10 == 0 or i == len(todo):

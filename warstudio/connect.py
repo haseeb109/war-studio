@@ -139,14 +139,14 @@ def test_gemini(key):
     note = "" if wanted in ("auto", model) else f" ('{wanted}' not available, using this instead)"
     if tried:
         note += f" (retired for this key: {', '.join(tried)})"
-    from .llm import _GEMINI_NO_OPT, gemini_fallback_models
+    from .llm import _GEMINI_NO_OPT, gemini_fallback_models, gemini_thinking_level
     opts = {"thinking", "media"} - _GEMINI_NO_OPT.get(model, set())
     try:
         backups = ", ".join(gemini_fallback_models(key, model)) or "none"
     except Exception:
         backups = "?"
     return True, (f"key OK · rerank model {model}{note} · backups: {backups} · thinking "
-                  f"{'low' if 'thinking' in opts else 'model default'}, image "
+                  f"{gemini_thinking_level(model)}, image "
                   f"{'medium res' if 'media' in opts else 'default res'} · tokens in {usage.get('promptTokenCount', '?')}, "
                   f"thinking {usage.get('thoughtsTokenCount', 0)} · test answer: {res.get('color', res)}")
 

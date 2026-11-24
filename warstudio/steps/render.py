@@ -84,6 +84,7 @@ def run_step(proj, settings, style, log, use_hf=True):
     segdir = proj / "segments"
     segdir.mkdir(exist_ok=True)
     seg_files = []
+    jobs = []
     last_src = None
     for i, b in enumerate(beats):
         bid = str(b["id"])
@@ -99,21 +100,45 @@ def run_step(proj, settings, style, log, use_hf=True):
         if out.exists():
             continue
         crop = (f or {}).get("crop_bottom", 0.0) if f and Path(f["file"]).exists() else 0.0
-        cmd = segment_cmd(src, frames, fps, style, spec.get(b["id"], {}).get("footage_class", "real"),
-                          rendered.get(bid), out, enc, crop)
+        jobs.append((bid, out, segment_cmd(src, frames, fps, style, spec.get(b["id"], {}).get("footage_class", "real"),
+                                           rendered.get(bid), out, enc, crop)))
+
+    # several segments at once: the Mac's media engine and CPU cores have room for 4
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    conc = max(1, int(settings.get("render_concurrency", 4)))
+    lock, done, failed = threading.Lock(), [0], []
+
+    def one(job):
+        bid, out, cmd = job
+        if failed:
+            return
         try:
             run(cmd, timeout=600)
         except RuntimeError as e:
-            if enc != "libx264":
-                log(f"segment {bid}: {enc} failed ({str(e)[-160:]}); switching to libx264 and re-rendering all segments")
-                from ..config import save_settings
-                save_settings({"encoder": "libx264"})
-                for p in segdir.glob("seg_*.mp4"):
-                    p.unlink()
-                return run_step(proj, dict(settings, encoder="libx264"), style, log, use_hf=use_hf)
-            raise
-        if i % 10 == 0 or i == len(beats) - 1:
-            log(f"render segment {i + 1}/{len(beats)} ({enc})", progress=(i + 1) / len(beats))
+            Path(out).unlink(missing_ok=True)          # never leave a half-written segment behind
+            with lock:
+                failed.append((bid, e))
+            return
+        with lock:
+            done[0] += 1
+            n = done[0]
+        if n % 10 == 0 or n == len(jobs):
+            log(f"render segment {n}/{len(jobs)} ({enc}, {conc} at a time)", progress=n / max(len(jobs), 1))
+
+    if jobs:
+        with ThreadPoolExecutor(conc) as ex:
+            list(ex.map(one, jobs))
+    if failed:
+        bid, e = failed[0]
+        if enc != "libx264":
+            log(f"segment {bid}: {enc} failed ({str(e)[-160:]}); switching to libx264 and re-rendering all segments")
+            from ..config import save_settings
+            save_settings({"encoder": "libx264"})
+            for p in segdir.glob("seg_*.mp4"):
+                p.unlink()
+            return run_step(proj, dict(settings, encoder="libx264"), style, log, use_hf=use_hf)
+        raise e
 
     lst = proj / "segments.txt"
     lst.write_text("".join(f"file '{p.resolve()}'\n" for p in seg_files))

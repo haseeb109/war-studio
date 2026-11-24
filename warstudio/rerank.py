@@ -8,6 +8,7 @@ How failures are handled (so a busy Google server can't silently turn a whole ru
 - Real errors (bad request etc.): dropped after 5 in a row.
 Every call's token usage is added up, so the log shows the real rerank cost of the run.
 """
+import threading
 import time
 
 from .llm import (LLMError, ModelGone, ProviderBusy, QuotaExhausted, gemini_fallback_models, gemini_pick,
@@ -44,6 +45,7 @@ class Reranker:
         self.fallbacks = []         # gemini fallback models
         self.exhausted = set()      # gemini models whose quota is used up for this run
         self.free_tier_warned = False
+        self._lock = threading.RLock()     # several beats are reranked at once
         self.stats = {"ok": 0, "retried": 0, "fallback_model": 0, "covered_by_other": 0, "clip": 0,
                       "in": 0, "out": 0, "thinking": 0, "by": {}}
         for p in chain_order(settings.get("reranker", "auto"), keys):
@@ -113,7 +115,10 @@ class Reranker:
                 continue
             except QuotaExhausted as e:
                 # quotas are per model: only this model is done, the others keep working
-                self.exhausted.add(m)
+                with self._lock:
+                    if m in self.exhausted:
+                        continue
+                    self.exhausted.add(m)
                 left = [x for x in [self.models["gemini"], *self.fallbacks] if x not in self.exhausted]
                 self.log(f"gemini {m}: quota used up for this run ({str(e)[-160:]}); "
                          + (f"continuing with {', '.join(left)}" if left else "no Gemini model left"))
@@ -134,6 +139,10 @@ class Reranker:
         raise ProviderBusy(f"every Gemini model is busy ({str(last)[-120:] if last else ''})")
 
     def _count(self, p, usage, groq=False):
+        with self._lock:
+            self._count_locked(p, usage, groq)
+
+    def _count_locked(self, p, usage, groq=False):
         if groq:
             self.stats["in"] += int(usage.get("prompt_tokens") or 0)
             self.stats["out"] += int(usage.get("completion_tokens") or 0)
@@ -147,16 +156,20 @@ class Reranker:
         self.stats["by"][p] = self.stats["by"].get(p, 0) + 1
 
     def _drop(self, p, why):
-        if p in self.chain:
+        with self._lock:
+            if p not in self.chain:
+                return
             self.chain.remove(p)
         nxt = self.active or "CLIP only"
         self.log(f"{p} rerank stopped ({why}); using {nxt} for the rest of this run")
 
     def _pause(self, p, why):
-        if self.paused.get(p, 0) <= self.clock():
+        with self._lock:
+            say = self.paused.get(p, 0) <= self.clock()
+            self.paused[p] = self.clock() + PAUSE_SECONDS
+        if say:
             self.log(f"{p} rerank paused for {PAUSE_SECONDS}s ({why[-120:]}); other provider/CLIP covers these beats, "
                      f"then {p} is tried again")
-        self.paused[p] = self.clock() + PAUSE_SECONDS
 
     def pick(self, make_collage, prompt, tag=""):
         """make_collage(tile_size) -> image path. Returns (result_dict, provider) or (None, None)."""
@@ -202,6 +215,8 @@ class Reranker:
         g_share = st["by"].get("gemini", 0) / max(st["ok"], 1)
         cost = g_share * (st["in"] * pin + (st["out"] + st["thinking"]) * pout) / 1e6
         by = ", ".join(f"{k} {v}" for k, v in st["by"].items()) or "none"
+        from .llm import gemini_thinking_level
+        think = ", ".join(f"{m}: {gemini_thinking_level(m)}" for m in [self.models.get("gemini"), *self.fallbacks] if m)
         return (f"rerank calls: {by}, CLIP only {st['clip']}; retried {st['retried']}, backup model "
                 f"{st['fallback_model']}, covered by other provider {st['covered_by_other']}; tokens in {st['in']}, "
-                f"out {st['out']}, thinking {st['thinking']}; Gemini cost ~${cost:.3f} (if billing is on)")
+                f"out {st['out']}, thinking {st['thinking']} (level {think or '-'}); Gemini cost ~${cost:.3f}")

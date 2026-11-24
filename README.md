@@ -119,3 +119,12 @@ After every cut, WarStudio checks the actual segment (not the search thumbnail):
   rejects either option it is sent again without it.
 - The log ends the rank step with real usage: calls, retries, backup-model uses, tokens and the Gemini cost
   (`gemini_price_in_per_m` / `gemini_price_out_per_m` in Settings).
+
+## Speed (v0.6.6)
+
+- **Rank in two phases**: (A) all previews downloaded 24 at a time (max 24 per beat, every search tier keeps seats),
+  CLIP for every beat, then the vision rerank for **8 beats at a time** (`rerank_concurrency`); (B) a quick walk over
+  the timeline that applies cooldown and in-scene reuse (max 3 uses of a clip per scene) with the scores from (A).
+- Gemini thinking `minimal` (falls to `low` on models without it) - fewer billed thinking tokens, faster answers.
+- Render: 4 segments at a time (`render_concurrency`), 5 HyperFrames overlays at a time.
+- Search 6 beats at a time, specs 6 chunks at a time, fetch 8 clips at a time.

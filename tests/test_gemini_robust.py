@@ -28,6 +28,7 @@ def img(tmp_path):
     p = tmp_path / "c.jpg"
     p.write_bytes(b"\xff\xd8\xff")
     llm._GEMINI_NO_OPT.clear()
+    llm._GEMINI_THINK.clear()
     return str(p)
 
 
@@ -37,7 +38,7 @@ def test_503_is_retried_then_succeeds(img, monkeypatch):
     res, usage = llm.gemini_pick("k", "gemini-3.8-flash", img, "p", sleep=slept.append)
     assert res["best"] == 2 and usage["_retries"] == 2 and slept == [2.0, 5.0]
     gc = sent[0]["generationConfig"]
-    assert gc["thinkingConfig"] == {"thinkingLevel": "low"} and gc["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
+    assert gc["thinkingConfig"] == {"thinkingLevel": "minimal"} and gc["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
 
 
 def test_503_three_times_raises_busy_not_error(img, monkeypatch):
@@ -73,10 +74,12 @@ def test_daily_quota_vs_per_minute(img, monkeypatch):
 
 def test_rejected_options_are_dropped_and_remembered(img, monkeypatch):
     bad = R(400, {"error": {"message": "Invalid JSON payload: unknown field thinkingLevel in thinking_config"}})
-    seq, sent = [bad, ok()], []
+    seq, sent = [bad, bad, ok()], []
     monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: (sent.append(json), seq.pop(0))[1])
     llm.gemini_pick("k", "gemini-2.5-flash", img, "p", sleep=lambda s: None)
-    assert "thinkingConfig" not in sent[1]["generationConfig"] and "mediaResolution" in sent[1]["generationConfig"]
+    # minimal -> low -> no thinking option at all (older model), media option kept
+    assert sent[1]["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "low"
+    assert "thinkingConfig" not in sent[2]["generationConfig"] and "mediaResolution" in sent[2]["generationConfig"]
     assert llm._GEMINI_NO_OPT["gemini-2.5-flash"] == {"thinking"}
 
 
@@ -180,3 +183,13 @@ def test_all_models_out_of_quota_drops_gemini(monkeypatch, tmp_path):
     rr, logs = make_rr(monkeypatch, beh)
     assert rr.pick(lambda t: str(tmp_path / "c.jpg"), "p") == (None, None)
     assert rr.chain == [] and any("rerank stopped" in l for l in logs)
+
+
+def test_model_without_minimal_thinking_falls_to_low(img, monkeypatch):
+    llm._GEMINI_THINK.clear()
+    bad = R(400, {"error": {"message": "thinking_level 'minimal' is not supported for this model"}})
+    seq, sent = [bad, ok()], []
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: (sent.append(json), seq.pop(0))[1])
+    llm.gemini_pick("k", "gemini-3.8-flash", img, "p", sleep=lambda s: None)
+    assert [x["generationConfig"]["thinkingConfig"]["thinkingLevel"] for x in sent] == ["minimal", "low"]
+    assert llm.gemini_thinking_level("gemini-3.8-flash") == "low"

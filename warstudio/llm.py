@@ -102,6 +102,14 @@ class ProviderBusy(LLMError):
 
 # per-model request options that the model rejected once (400) - not sent again in this session
 _GEMINI_NO_OPT = {}
+# thinking level per model: 'minimal' first (cheapest, fastest); a model without it (e.g. 3.8 Flash) falls to 'low'
+_GEMINI_THINK = {}
+
+
+def gemini_thinking_level(model):
+    if "thinking" in _GEMINI_NO_OPT.get(model, set()):
+        return "model default"
+    return _GEMINI_THINK.get(model, "minimal")
 GEMINI_TIMEOUT = 30     # a rerank answer takes a few seconds; a call this slow means the model is struggling
 GEMINI_RETRY_WAITS = (2.0, 5.0)        # 503/500/timeouts: two quick retries, then the caller falls back
 GEMINI_MAX_RPM_WAIT = 60               # a per-minute 429 shorter than this is waited out
@@ -144,11 +152,11 @@ def _is_daily_quota(r):
     return gemini_quota_info(r)["daily"]
 
 
-def gemini_body(img_b64, prompt, opts):
+def gemini_body(img_b64, prompt, opts, level="minimal"):
     gc = {"response_mime_type": "application/json", "temperature": 0.1}
     if "thinking" in opts:
-        # scoring 5 tiles needs no long reasoning: 'low' works on every Gemini 3.x Flash (3.8 has no 'minimal')
-        gc["thinkingConfig"] = {"thinkingLevel": "low"}
+        # scoring 5 tiles needs no long reasoning; thinking tokens are billed as output and slow the answer
+        gc["thinkingConfig"] = {"thinkingLevel": level}
     if "media" in opts:
         gc["mediaResolution"] = "MEDIA_RESOLUTION_MEDIUM"     # 560 instead of 1,120 tokens per image
     return {"contents": [{"parts": [{"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}, {"text": prompt}]}],
@@ -171,7 +179,7 @@ def gemini_pick(key, model, image_path, prompt, timeout=GEMINI_TIMEOUT, retry_wa
     while True:
         opts = {"thinking", "media"} - _GEMINI_NO_OPT.get(model, set())
         try:
-            r = httpx.post(url, json=gemini_body(img, prompt, opts), timeout=timeout)
+            r = httpx.post(url, json=gemini_body(img, prompt, opts, gemini_thinking_level(model)), timeout=timeout)
         except httpx.TimeoutException as e:
             # no retry on the same model: another 30 s wait rarely helps - the caller moves to a backup model
             raise ProviderBusy(f"gemini {model}: no answer in {timeout}s ({type(e).__name__})")
@@ -185,6 +193,11 @@ def gemini_pick(key, model, image_path, prompt, timeout=GEMINI_TIMEOUT, retry_wa
             low = r.text.lower()
             bad = {o for o, words in (("thinking", ("thinking",)), ("media", ("media", "resolution"))) if o in opts
                    and any(w in low for w in words)}
+            if "thinking" in bad and gemini_thinking_level(model) == "minimal":
+                _GEMINI_THINK[model] = "low"           # this model has no 'minimal': try 'low' before giving up
+                bad.discard("thinking")
+                if not bad:
+                    continue
             if bad:
                 _GEMINI_NO_OPT.setdefault(model, set()).update(bad)
                 continue

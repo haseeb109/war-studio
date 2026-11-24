@@ -199,7 +199,7 @@ def render_all(overlay_plan, style, work, log, use_hf=True):
             hf = False
         else:
             from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(3) as ex:
+            with ThreadPoolExecutor(5) as ex:
                 for item, (bid, res) in zip(uniq[1:], ex.map(do_hf, uniq[1:])):
                     made[str(item[2])] = res
         for bid, ov, webm, png in todo:

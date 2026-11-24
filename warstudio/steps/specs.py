@@ -145,7 +145,7 @@ def run_step(proj, keys, settings, log, dummy=False):
             log(f"specs {done_n[0]}/{len(beats)}", progress=done_n[0] / len(beats))
         return out
 
-    with ThreadPoolExecutor(3) as ex:
+    with ThreadPoolExecutor(6) as ex:
         for part in ex.map(do_chunk, range(0, len(beats), CHUNK)):
             specs.update(part)
     result = [specs[b["id"]] for b in beats]
