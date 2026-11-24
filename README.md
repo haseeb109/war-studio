@@ -30,6 +30,19 @@ Then double-click **`WarStudio.command`** (or `uv run python run.py gui`). The G
 
 Tip: tick **Dry run** for a first test: silent voice and no AI credits, but real footage search, ranking and render.
 
+
+## Master prompt (locked)
+
+`prompts/master_prompt.md` is the rulebook the brain follows for every beat, and the later steps obey what it writes:
+
+1. **Visual line** - a concrete description of the frame; CLIP and the reranker judge clips against it, not against the narration.
+2. **Three search tiers** - exact system -> look-alike substitute -> broad category. All tiers are searched, so a beat falls back to a correct-looking clip instead of a random one. Rank prefers exact > substitute > category.
+3. **Scene continuity** - beats in the same situation share a `scene` label; inside a scene a strong clip may be reused (max 3 times) from a different moment, like a human editor cutting several shots from one clip. The cooldown only blocks repeats across different scenes.
+4. **Single shots over reels** - source videos longer than 90 s (multi-shot reels with interviews/slates) are ranked lower unless they are the exact system.
+5. **Cinematic stock only** - Pixabay is searched with `video_type=film` and `min_width=1920` (no 3D renders, no low-res).
+
+The log shows `match level: exact N, substitute N, category N, reuse N`; the Review editor flags `category clip` where a named system only got its broad class.
+
 ## API keys
 
 | Key | Used for | Needed? |

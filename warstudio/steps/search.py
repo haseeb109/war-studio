@@ -82,7 +82,9 @@ def search_pexels(q, key, n):
 
 
 def search_pixabay(q, key, n):
-    d = _cached_get("pixabay", "https://pixabay.com/api/videos/", {"key": key, "q": q, "per_page": max(3, n)})
+    # film only (no 3D/animation renders) and full-HD sources, closer to the cinematic Pexels look
+    d = _cached_get("pixabay", "https://pixabay.com/api/videos/", {"key": key, "q": q, "per_page": max(3, n),
+                                                                  "video_type": "film", "min_width": 1920})
     out = []
     for h in d.get("hits") or []:
         vids = h.get("videos") or {}
@@ -191,9 +193,13 @@ def run_step(proj, keys, settings, style, log):
         bid = str(sp["id"])
         cands, seen = [], set()
         queries = list(sp["queries"])
+        tiers = list(sp.get("tiers") or (["exact"] + ["category"] * (len(queries) - 1)))
         if sp["footage_class"] == "map":
             queries = [q + " aerial" for q in queries[:2]] + ["satellite earth view", "aerial coastline"]
-        for q in queries:
+            tiers = tiers[:2] + ["category", "category"]
+        # Master prompt: every tier is searched (exact -> substitute -> category) so rank can fall back to a
+        # look-alike or the broad class instead of a random clip.
+        for q, tier in zip(queries, tiers):
             for src in order_for(sp["footage_class"], style):
                 if src in down or src not in active:
                     continue
@@ -213,9 +219,8 @@ def run_step(proj, keys, settings, style, log):
                     if k not in seen and c["preview_url"]:
                         seen.add(k)
                         c["query"] = q
+                        c["tier"] = tier
                         cands.append(c)
-            if len(cands) >= n:
-                break
         return bid, cands
 
     todo = [sp for sp in specs if not done.get(str(sp["id"]))]

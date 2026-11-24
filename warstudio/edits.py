@@ -142,12 +142,15 @@ def review_data(proj):
             flags.append("low match")
         if spec.get(b["id"], {}).get("fallback") and not (p.get("gemini_score") or 0) >= 6:
             flags.append("generic search")
+        if spec.get(b["id"], {}).get("entity") and p.get("tier") == "category" and not p.get("scene_reuse"):
+            flags.append("category clip")     # named system, but only the broad class was found
         alts = p.get("alternates") or []
         out.append({
             "id": b["id"], "sid": b["sid"], "text": b["text"], "start": b["start"], "end": _beat_end(d, b),
             "footage_class": spec.get(b["id"], {}).get("footage_class", "real"),
             "entity": spec.get(b["id"], {}).get("entity", ""),
             "queries": spec.get(b["id"], {}).get("queries", []),
+            "visual": spec.get(b["id"], {}).get("visual", ""), "tier": p.get("tier", ""), "scene": spec.get(b["id"], {}).get("scene", ""),
             "pick": {k: p.get(k) for k in ("source", "id", "title", "gemini_score", "clip_score", "page_url", "credit")} if p else None,
             "pick_preview": Path(p["preview_file"]).name if p.get("preview_file") else "",
             "clip": {"start": f.get("start"), "length": f.get("length"), "source_duration": p.get("duration")} if f else None,

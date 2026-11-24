@@ -13,7 +13,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from ..rerank import Reranker
-from ..util import download, read_json, write_json
+from ..util import download, num, read_json, write_json
 
 _CLIP = {}
 
@@ -103,13 +103,35 @@ def make_collage(paths, out, tile=(512, 288)):
     return out
 
 
+# Master-prompt ranking rules (see prompts/master_prompt.md)
+TIER_BONUS = {"exact": 0.02, "substitute": 0.01, "category": 0.0}
+REEL_SECONDS = 90          # longer source videos are multi-shot reels (interviews, slates): prefer single shots
+REEL_PENALTY = 0.02
+SCENE_REUSE_BONUS = 0.015  # same scene: reusing a strong clip from another moment beats a weaker new clip
+SCENE_REUSE_MAX = 3        # uses of one clip inside one scene
+
+
+def adjusted_score(c):
+    s = c.get("clip_score_raw", c.get("clip_score", 0)) + TIER_BONUS.get(c.get("tier"), 0.0)
+    if num(c.get("duration")) > REEL_SECONDS and c.get("tier") != "exact":
+        s -= REEL_PENALTY
+    if c.get("scene_reuse"):
+        s += SCENE_REUSE_BONUS
+    return s
+
+
 def _prompt(beat, spec, n):
     avoid = ", ".join(spec.get("avoid") or []) or "none"
     ent = spec.get("entity") or "not specified"
+    ladder = (f"1) the exact subject ({ent}) = best; 2) the look-alike '{spec.get('substitute') or '-'}' = good; "
+              f"3) the broad class '{spec.get('category') or '-'}' = acceptable; 4) anything else = max 2.")
     return (f"You are picking B-roll for a military documentary.\nNarration: \"{beat['text']}\"\n"
-            f"Required subject: {ent}. Footage type wanted: {spec['footage_class']}. Wrong matches: {avoid}.\n"
-            f"The image has {n} numbered tiles. Score each tile 0-10 for how well it shows what the narration says "
-            f"(exact system named = most important; wrong aircraft/ship type = max 3; text/watermark/logos = minus 3).\n"
+            f"What the frame should show: {spec.get('visual') or beat['text']}\n"
+            f"Footage type wanted: {spec['footage_class']}. Wrong matches: {avoid}.\n"
+            f"Preference ladder: {ladder}\n"
+            f"The image has {n} numbered tiles. Score each tile 0-10 by that ladder "
+            f"(wrong aircraft/ship type = max 3; airshow, toy, game or 3D render for a real event = max 3; "
+            f"text/watermark/logos = minus 3; a single clean cinematic shot beats a busy one).\n"
             f'Return JSON: {{"scores": [<{n} integers in tile order>], "best": <tile number>}}')
 
 
@@ -127,16 +149,35 @@ def run_step(proj, keys, settings, style, log):
     from ..config import save_settings
     rr = Reranker(keys, settings, log, save_settings)
     log(f"ranking with {rr.label}")
-    recent = []  # (time, source_key)
+    recent = []  # (time, source_key, scene)
+    scene_picks = {}  # scene -> list of winners in that scene (for reuse)
     for b in beats:
         bid = str(b["id"])
+        sp = specs[b["id"]]
+        scene = sp.get("scene") or ""
         if bid in picks:
             p = picks[bid]
             if p:
-                recent.append((b["start"], f"{p['source']}:{p['id']}"))
+                recent.append((b["start"], f"{p['source']}:{p['id']}", scene))
+                if scene:
+                    scene_picks.setdefault(scene, []).append(p)
             continue
-        cl = [c for c in cands.get(bid, []) if f"{c['source']}:{c['id']}" not in
-              {sk for t, sk in recent if b["start"] - t < cool}]
+        # cooldown only blocks repeats across DIFFERENT scenes; inside one scene a clip may come back
+        blocked = {sk for t, sk, scn in recent if b["start"] - t < cool and not (scene and scn == scene)}
+        cl = [dict(c) for c in cands.get(bid, []) if f"{c['source']}:{c['id']}" not in blocked]
+        if scene and scene_picks.get(scene):
+            have = {f"{c['source']}:{c['id']}" for c in cl}
+            uses = {}
+            for p in scene_picks[scene]:
+                k_ = f"{p['source']}:{p['id']}"
+                uses[k_] = uses.get(k_, 0) + 1
+            for p in reversed(scene_picks[scene]):
+                k_ = f"{p['source']}:{p['id']}"
+                if k_ in have or uses[k_] >= SCENE_REUSE_MAX:
+                    continue
+                have.add(k_)
+                cl.append({x: v for x, v in p.items() if x not in ("alternates", "gemini_score", "rerank_by")}
+                          | {"scene_reuse": True})
         if not cl:
             picks[bid] = None
             continue
@@ -151,14 +192,15 @@ def run_step(proj, keys, settings, style, log):
         if not cl:
             picks[bid] = None
             continue
-        sp = specs[b["id"]]
-        text = f"{sp.get('entity', '')} {b['text']}".strip()
+        # CLIP compares against the concrete visual line from the master prompt, not the narration
+        text = (sp.get("visual") or f"{sp.get('entity', '')} {b['text']}").strip()
         sc = clip_scores(settings, text, [c["preview_file"] for c in cl])
         for c, s in zip(cl, sc):
             title = (c.get("title") or "").lower()
             if any(a.lower() in title for a in sp.get("avoid") or [] if a):
                 s -= 0.05
-            c["clip_score"] = round(s, 4)
+            c["clip_score_raw"] = round(s, 4)
+            c["clip_score"] = round(adjusted_score(c), 4)
         top = diverse_top(cl, k)
         winner, gscore, scores, by = top[0], None, None, None
         if rr.active and len(top) > 1:
@@ -173,14 +215,17 @@ def run_step(proj, keys, settings, style, log):
                 if 1 <= best <= len(top):
                     winner = top[best - 1]
                     gscore = scores[best - 1] if len(scores) >= best else None
-        keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit", "clip_score", "query")
+        keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit",
+                "clip_score", "query", "tier", "scene_reuse", "license", "min_start")
         alts = [{x: c.get(x) for x in keep} for c in top]
         if isinstance(scores, list):
             for a, s_ in zip(alts, scores):
                 a["gemini_score"] = s_
-        winner = dict(winner, gemini_score=gscore, rerank_by=by or "clip", alternates=alts)
+        winner = dict(winner, gemini_score=gscore, rerank_by=by or "clip", alternates=alts, scene=scene)
         picks[bid] = winner
-        recent.append((b["start"], f"{winner['source']}:{winner['id']}"))
+        recent.append((b["start"], f"{winner['source']}:{winner['id']}", scene))
+        if scene:
+            scene_picks.setdefault(scene, []).append(winner)
         if int(bid) % 10 == 0:
             write_json(out_path, picks)
             log(f"rank {int(bid) + 1}/{len(beats)}", progress=(int(bid) + 1) / len(beats))
@@ -189,6 +234,8 @@ def run_step(proj, keys, settings, style, log):
     mix = Counter((v or {}).get("source", "none") for v in picks.values())
     by = Counter((v or {}).get("rerank_by", "clip") for v in picks.values() if v)
     log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by.most_common()))
+    tiers = Counter(("reuse" if (v or {}).get("scene_reuse") else (v or {}).get("tier", "?")) for v in picks.values() if v)
+    log("match level: " + ", ".join(f"{a} {b}" for a, b in tiers.most_common()))
     log(f"rank done; {sum(1 for v in picks.values() if not v)} beats without a pick; picks per source: " +
         ", ".join(f"{a} {b}" for a, b in mix.most_common()))
     return picks
