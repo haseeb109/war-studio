@@ -147,3 +147,13 @@ Every video ("My Library (first)" on the Create page):
 - the rest go online (DVIDS etc.) with the Gemini rerank as before;
 - uses are counted per shot; online clips Gemini scored 7+ that passed the clean check join the library
   (`library_learn`), so the library grows with every video at no extra cost.
+
+### Library v0.8.1: no duplicates, keeps growing
+- **Duplicates**: a shot is skipped when its keyframe hash is within 6 bits of an existing shot, or CLIP >= 0.965 with
+  a loosely similar hash (the same B-roll re-posted in another DVIDS package), or it overlaps half of an existing
+  shot from the same source video. Skipped files are deleted; the log counts them.
+- **Learning**: every clean online clip of a finished video joins the library (DVIDS only by default:
+  `library_learn_sources`; `library_learn_min_score` = 0 keeps all, quality = its Gemini score).
+- **Growing past 1,000s of shots**: the builder walks DVIDS result pages per category (50 per page, up to 40 pages)
+  and remembers where it stopped. "Stop at library size (GB)" on the Library tab (default 100).
+- Matching prefers shots with a higher quality score.

@@ -60,13 +60,15 @@ def _thumb(v):
     return v or ""
 
 
-def search_dvids(q, key, n):
+def search_dvids(q, key, n, page=1):
     # thumb_width/height: DVIDS defaults to 122x92 thumbnails, far too small for CLIP/Gemini to judge,
     # which made DVIDS clips lose every ranking against Pixabay's 640px previews.
     # (v0.5 also sent aspect_ratio=landscape + thumb_height; on real runs that returned nothing for videos.)
     # Ask with big thumbnails first; if that gives nothing, the plain query that has always worked;
     # then the first words only (DVIDS full-text search needs every word to match).
     base = {"api_key": key, "type": "video", "max_results": min(50, n)}
+    if page > 1:
+        base["page"] = int(page)
     words = q.split()
     attempts = [dict(base, q=q, thumb_width=640, sort="score", sortdir="desc"), dict(base, q=q)]
     if len(words) > 2:

@@ -64,6 +64,7 @@ class LibBuild(BaseModel):
     target: int = 1000
     per_video: int = 4
     categories: list[str] = []
+    max_gb: float = 100
 
 
 @app.get("/api/library")
@@ -81,7 +82,7 @@ def library_build(b: LibBuild):
     if b.target < 10:
         raise HTTPException(400, "target must be at least 10 shots")
     try:
-        return library.start_build(b.target, b.categories or None, b.per_video)
+        return library.start_build(b.target, b.categories or None, b.per_video, b.max_gb)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
 

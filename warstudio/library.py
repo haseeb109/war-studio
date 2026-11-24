@@ -99,7 +99,27 @@ def _db(settings=None):
       note TEXT, done REAL, PRIMARY KEY(source, src_id));
     CREATE TABLE IF NOT EXISTS uses(shot_id INTEGER, project TEXT, at REAL);
     """)
+    if "phash" not in [r[1] for r in con.execute("PRAGMA table_info(shots)")]:
+        con.execute("ALTER TABLE shots ADD COLUMN phash TEXT")
+        con.commit()
     return con
+
+
+def dhash(path):
+    """64-bit difference hash of an image: near-identical frames differ in only a few bits."""
+    from PIL import Image
+    px = np.asarray(Image.open(path).convert("L").resize((9, 8)), dtype=np.int16)
+    bits = (px[:, 1:] > px[:, :-1]).flatten()
+    return int("".join("1" if b else "0" for b in bits), 2)
+
+
+def hamming(a, b):
+    return bin(int(a) ^ int(b)).count("1")
+
+
+DUP_HASH_BITS = 6        # keyframes this close are the same picture
+DUP_CLIP = 0.965         # ...or this similar for CLIP with a loosely similar hash
+DUP_CLIP_HASH_BITS = 14
 
 
 def stats(settings=None):
@@ -109,10 +129,12 @@ def stats(settings=None):
         cats = {r[0] or "?": r[1] for r in con.execute("SELECT category, COUNT(*) FROM shots GROUP BY category")}
         vids = {r[0]: r[1] for r in con.execute("SELECT status, COUNT(*) FROM videos GROUP BY status")}
         learned = con.execute("SELECT COUNT(*) FROM shots WHERE origin LIKE 'video:%'").fetchone()[0]
+        dupes = con.execute("SELECT COUNT(*) FROM videos WHERE status = 'dupes'").fetchone()[0]
         con.close()
     size = sum(f.stat().st_size for f in lib_dir(settings).glob("*.mp4"))
     free = shutil.disk_usage(lib_dir(settings)).free
     return {"shots": n, "by_category": cats, "videos": vids, "learned_from_videos": learned,
+            "avg_mb_per_shot": round(size / 1e6 / n, 1) if n else 9.0,
             "gb": round(size / 1e9, 2), "free_gb": round(free / 1e9, 1), "dir": str(lib_dir(settings))}
 
 
@@ -195,6 +217,9 @@ class LibraryIndex:
                 continue
             bonus = 0.04 if ent_ok else 0.0
             bonus += min(0.03, 0.01 * sum(1 for w in words if w in hay))
+            q = num(r.get("quality"), 0)
+            if q:
+                bonus += max(-0.01, min(0.01, 0.004 * (q - 6)))           # cleaner / more cinematic shots first
             pen = min(0.04, 0.01 * self.recent.get(r["id"], 0))          # used in other videos this week
             if time.time() - (r.get("last_used") or 0) < 86400:
                 pen += 0.01
@@ -303,11 +328,16 @@ class Builder:
         self.per_video = int(settings.get("library_shots_per_video", 4))
         self.max_gb = float(settings.get("library_max_gb", 200))
         self.captioner = None
+        self._dup_lock = threading.Lock()
+        self._dup = None            # [(id, phash, vec, source, src_id, start, length)]
+        self.dupes = 0
+        self.pages = {}             # category -> next DVIDS results page
 
     # -- DVIDS
-    def _dvids_search(self, query, n=50):
+    def _dvids_search(self, query, n=50, page=1):
         from .steps.search import search_dvids
-        return search_dvids(query + " B-Roll", self.keys["DVIDS_API_KEY"], n) + search_dvids(query, self.keys["DVIDS_API_KEY"], n)
+        k = self.keys["DVIDS_API_KEY"]
+        return search_dvids(query + " B-Roll", k, n, page) + search_dvids(query, k, n, page)
 
     def _dvids_asset(self, src_id):
         r = httpx.get("https://api.dvidshub.net/asset", params={"api_key": self.keys["DVIDS_API_KEY"], "id": src_id},
@@ -345,11 +375,28 @@ class Builder:
             return False
         return True
 
-    def candidates(self, cat_query):
-        """DVIDS results for a category: B-Roll first, no interviews/briefings, 20 s - 15 min, not done before."""
+    def candidates(self, cat_query, want=12, max_page=40):
+        """New DVIDS videos for a category: B-Roll first, no interviews/briefings, 20 s - 15 min, not done before.
+        Walks the result pages (50 per page) until `want` new videos are found, remembering the page for the
+        next call - so the library can keep growing far past the first page of every category."""
         from .steps.rank import title_adjust
         seen_ids, out = set(), []
-        for r in self._dvids_search(cat_query):
+        page = self.pages.get(cat_query, 1)
+        raw = []
+        while len(out) < want and page <= max_page:
+            got = self._dvids_search(cat_query, 50, page)
+            page += 1
+            if not got:
+                page = max_page + 1
+                break
+            raw = got
+            out += self._filter(raw, seen_ids)
+        self.pages[cat_query] = page
+        return sorted(out, key=lambda r: -title_adjust(r.get("title")))
+
+    def _filter(self, results, seen_ids):
+        out = []
+        for r in results:
             t = (r.get("title") or "").lower()
             d = num(r.get("duration"))
             if r["id"] in seen_ids or any(w in t for w in SKIP_TITLE) or (d and not 20 <= d <= 900):
@@ -357,7 +404,7 @@ class Builder:
             seen_ids.add(r["id"])
             if not self._seen(r["id"]):
                 out.append(r)
-        return sorted(out, key=lambda r: -title_adjust(r.get("title")))
+        return out
 
     def process_video(self, cat, r):
         """One DVIDS video -> up to per_video clean 1080p shots in the library. Returns shots added."""
@@ -422,12 +469,60 @@ class Builder:
                             credit=r.get("credit") or "DVIDS", license="Public domain (US DoD / DVIDS)",
                             page_url=r.get("page_url") or asset.get("url") or "", origin="build")
 
+    def _load_dups(self):
+        with _DB_LOCK:
+            con = _db(self.settings)
+            rows = [dict(r) for r in con.execute(
+                "SELECT id, phash, emb, keyframe, source, src_id, src_start, length FROM shots")]
+            fix = []
+            for r in rows:
+                if not r["phash"] and r["keyframe"] and Path(r["keyframe"]).exists():
+                    r["phash"] = str(dhash(r["keyframe"]))
+                    fix.append((r["phash"], r["id"]))
+            if fix:
+                con.executemany("UPDATE shots SET phash = ? WHERE id = ?", fix)
+                con.commit()
+            con.close()
+        self._dup = [(r["id"], int(r["phash"]) if r["phash"] else None,
+                      np.frombuffer(r["emb"], dtype=np.float32) if r["emb"] else None,
+                      r["source"], r["src_id"], num(r["src_start"]), num(r["length"])) for r in rows]
+
+    def duplicate_of(self, vec, ph, source, src_id, st, L):
+        """Id of an existing shot this one duplicates, else None.
+        Same source video with the time ranges overlapping by half or more, or the same picture:
+        DVIDS often posts the same B-roll inside several packages, so the picture check matters."""
+        if self._dup is None:
+            self._load_dups()
+        for sid, h, v, src, sidv, s0, l0 in self._dup:
+            if src == source and sidv == src_id and L and l0:
+                ov = min(st + L, s0 + l0) - max(st, s0)
+                if ov >= 0.5 * min(L, l0):
+                    return sid
+            if h is None:
+                continue
+            d = hamming(h, ph)
+            if d <= DUP_HASH_BITS:
+                return sid
+            if v is not None and d <= DUP_CLIP_HASH_BITS and float(np.dot(v, vec)) >= DUP_CLIP:
+                return sid
+        return None
+
     def _insert(self, out, kf, source, src_id, src_start, length, title, cat_name, cat_entity, credit, license,
                 page_url, origin, caption=None):
         if not Path(kf).exists():
             Path(out).unlink(missing_ok=True)
             return False
         vec = clip_image_vecs(self.settings, [kf])[0]
+        ph = dhash(kf)
+        with self._dup_lock:
+            dup = self.duplicate_of(vec, ph, source, src_id, num(src_start), num(length))
+            if dup is not None:
+                self.dupes += 1
+                Path(out).unlink(missing_ok=True)
+                Path(kf).unlink(missing_ok=True)
+                return False
+            # reserve the slot now so a parallel worker can't add the same picture meanwhile
+            self._dup.append((-1, ph, vec, source, src_id, num(src_start), num(length)))
         cap = caption
         if cap is None and self.captioner:
             try:
@@ -439,13 +534,14 @@ class Builder:
         row = (source, src_id, title[:200], cat_name, src_start, length, str(out), str(kf),
                str(cap.get("caption") or title)[:300], str(cap.get("entity") or cat_entity or "")[:80],
                " ".join(str(t) for t in tags)[:300], str(cap.get("shot") or "")[:20], num(cap.get("quality"), 0),
-               credit[:200], license[:120], page_url[:300], vec.astype(np.float32).tobytes(), time.time(), origin)
+               credit[:200], license[:120], page_url[:300], vec.astype(np.float32).tobytes(), time.time(), origin,
+               str(ph))
         with _DB_LOCK:
             con = _db(self.settings)
             try:
                 con.execute("""INSERT INTO shots(source, src_id, title, category, src_start, length, file, keyframe,
-                    caption, entity, tags, shot_type, quality, credit, license, page_url, emb, added, origin)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
+                    caption, entity, tags, shot_type, quality, credit, license, page_url, emb, added, origin, phash)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
                 con.commit()
                 ok = True
             except sqlite3.IntegrityError:
@@ -494,12 +590,17 @@ class Builder:
                 count[0] += n
                 c_ = count[0]
             rate = (c_ - have) / max(time.time() - t0, 1) * 3600
-            self.log(f"  {name}: +{n} shots ({c_}/{target}, ~{rate:.0f} shots/hour)", )
+            self.log(f"  {name}: +{n} shots ({c_}/{target}, ~{rate:.0f} shots/hour, {self.dupes} duplicates skipped)")
             self.status(shots=c_, target=target, progress=min(1.0, c_ / target))
 
         while count[0] < target and not self.stop.is_set() and any(queues.values()):
             batch = []
             for name in list(queues):
+                if not queues[name] and self.pages.get(by_name[name][1], 1) <= 40:
+                    try:
+                        queues[name] = self.candidates(by_name[name][1])      # next result pages
+                    except Exception:
+                        queues[name] = []
                 if queues[name]:
                     batch.append((name, queues[name].pop(0)))
             for i in range(0, len(batch), 4):
@@ -513,23 +614,26 @@ class Builder:
         if not any(queues.values()) and count[0] < target:
             self.log("no more new DVIDS videos in these categories - add categories or lower the target")
         self.log(f"library build {'stopped' if self.stop.is_set() and count[0] < target else 'done'}: "
-                 f"{count[0]} shots in {(time.time() - t0) / 60:.0f} min")
+                 f"{count[0]} shots in {(time.time() - t0) / 60:.0f} min; {self.dupes} duplicate shots skipped")
         return count[0]
 
     # -- learning from a finished video
     def learn_from_project(self, proj):
-        """Online clips of a finished video that Gemini scored >= 7 and that passed the clean check join the
-        library (caption = the beat's visual line). No extra API cost."""
+        """Every online clip of a finished video that passed the clean check joins the library (caption = the
+        beat's visual line, quality = its Gemini score). Only from `library_learn_sources` (DVIDS by default) and
+        at least `library_learn_min_score`. Duplicates are skipped. No extra API cost."""
         proj = Path(proj)
         picks = read_json(proj / "picks.json", {}) or {}
         fetched = read_json(proj / "fetched.json", {}) or {}
         specs = {str(s["id"]): s for s in (read_json(proj / "specs.json", []) or [])}
+        allowed = set(self.settings.get("library_learn_sources") or ["dvids"])
+        min_score = num(self.settings.get("library_learn_min_score"), 0)
         added = 0
         for bid, f in fetched.items():
             p = picks.get(bid) or {}
-            if not f or f.get("source") in ("library", "user") or f.get("problems"):
+            if not f or f.get("source") not in allowed or f.get("problems"):
                 continue
-            if num(p.get("gemini_score"), 0) < 7 or not Path(f["file"]).exists() or num(f.get("length")) < 2.0:
+            if num(p.get("gemini_score"), 0) < min_score or not Path(f["file"]).exists() or num(f.get("length")) < 1.5:
                 continue
             sp = specs.get(bid, {})
             base = f"{f['source']}_{re.sub(r'[^0-9A-Za-z]+', '_', str(f['id']))}_{int(num(f.get('start')) * 100)}"
@@ -559,13 +663,15 @@ def job_status():
     return st
 
 
-def start_build(target, categories=None, per_video=None):
+def start_build(target, categories=None, per_video=None, max_gb=None):
     from .config import load_keys, load_settings
     if _JOB["thread"] and _JOB["thread"].is_alive():
         raise RuntimeError("a library build is already running")
     settings = load_settings()
     if per_video:
         settings = dict(settings, library_shots_per_video=int(per_video))
+    if max_gb:
+        settings = dict(settings, library_max_gb=float(max_gb))
     st = {"state": "running", "started": time.time(), "target": int(target), "log": [], "progress": 0}
     write_json(STATUS_FILE, st)
     lock = threading.Lock()

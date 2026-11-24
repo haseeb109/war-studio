@@ -260,6 +260,7 @@
       <div class="row" style="margin:14px 0">
         <div><label>Total shots wanted</label><input id="lbTarget" type="number" value="1000" min="10" step="100"></div>
         <div><label>Shots per DVIDS video</label><input id="lbPer" type="number" value="4" min="1" max="8"></div>
+        <div><label>Stop at library size (GB)</label><input id="lbGb" type="number" value="100" min="5" step="10"></div>
         <div style="flex:0"><button class="btn" id="lbStart">Build / top up</button></div>
         <div style="flex:0"><button class="btn ghost" id="lbStop">Stop</button></div>
       </div>
@@ -437,7 +438,9 @@ async function loadLibrary() {
   const st = d.stats, job = d.job || {};
   box.querySelectorAll("[data-cat]").forEach(s => { const n = st.by_category[s.dataset.cat]; s.textContent = n ? `(${n})` : ""; });
   const vids = Object.entries(st.videos || {}).map(([k, v]) => `${v} ${k}`).join(", ") || "none";
-  $("#lbStats").innerHTML = `<b>${st.shots}</b> shots · ${st.gb} GB · ${st.learned_from_videos} learned from your videos ·
+  const per = st.avg_mb_per_shot || 9;
+  $("#lbStats").innerHTML = `<b>${st.shots}</b> shots · ${st.gb} GB (~${per} MB per shot, 100 GB ≈ ${Math.round(100000 / per).toLocaleString()} shots) ·
+    ${st.learned_from_videos} learned from your videos ·
     DVIDS videos processed: ${vids} · ${st.free_gb} GB free on disk<br>Folder: ${esc(st.dir)}` +
     (job.state ? `<br>Build: <b>${esc(job.state)}</b>${job.running ? " (running)" : ""}${job.target ? ` · ${job.shots || st.shots}/${job.target}` : ""}` : "");
   $("#lbLog").textContent = (job.log || []).join("\n");
@@ -450,7 +453,8 @@ $("#lbStart").onclick = async () => {
   const cats = [...document.querySelectorAll(".lbCat:checked")].map(x => x.value);
   if (!cats.length) { toast("Pick at least one category"); return; }
   try {
-    await api("/api/library/build", {target: +$("#lbTarget").value, per_video: +$("#lbPer").value, categories: cats});
+    await api("/api/library/build", {target: +$("#lbTarget").value, per_video: +$("#lbPer").value, categories: cats,
+                                     max_gb: +$("#lbGb").value});
     toast("Library build started - you can leave it running overnight");
   } catch (e) { toast(e.message); }
   loadLibrary();

@@ -119,9 +119,10 @@ def run_project(proj, from_step=None):
         if not dummy and str(settings.get("library_learn", True)).lower() not in ("false", "0", "no"):
             try:
                 from .library import Builder
-                n_new = Builder(keys, settings, log).learn_from_project(proj)
-                if n_new:
-                    log(f"library: +{n_new} shots learned from this video (Gemini score 7+, clean)")
+                lb = Builder(keys, settings, log)
+                n_new = lb.learn_from_project(proj)
+                log(f"library: +{n_new} shots learned from this video's online clips"
+                    + (f", {lb.dupes} already in the library (duplicates skipped)" if lb.dupes else ""))
             except Exception as e:
                 log(f"library: learning skipped ({str(e)[:120]})")
         log(f"DONE in {fmt_duration(time.time() - t0)}" + (f" (all steps together: {fmt_duration(total)})"
