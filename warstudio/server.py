@@ -354,7 +354,8 @@ def jobs():
                     "created": meta.get("created"), "seconds": qc.get("video_seconds"), "style": meta.get("style"),
                     "no_footage": len(qc.get("beats_without_footage", [])), "review": rv.get("state", "unreviewed"),
                     "total_seconds": st.get("total_seconds"), "run_started": st.get("run_started"),
-                    "dummy": meta.get("dummy", False), "cost": costs.summary(p.parent, settings)})
+                    "dummy": meta.get("dummy", False), "cost": costs.summary(p.parent, settings),
+                    "mix": qc.get("source_mix")})
     return out
 
 

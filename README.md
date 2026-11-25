@@ -82,6 +82,14 @@ Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, over
 
 **Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, and the sound design below (from a NexLev study of the channel's latest videos).
 
+## Mission Control UI (v1.0.0)
+Mac look (system font, translucent toolbar, follows Light/Dark mode). New **Dashboard** home: videos this week,
+average cost and time per video, share of footage from your library, what is running now (live progress), library
+size and sound coverage, cost of the last 7 videos, recent videos. Video cards show a footage-mix bar (green library,
+blue DVIDS); the review timeline colours each beat by its source (green library, blue DVIDS, red flagged).
+Small animations: flowing progress bars, cards fading in, hover lift, pulsing running step, sliding toasts - all
+off when macOS "Reduce motion" is on.
+
 ## Cost of every video (v0.9.9)
 Each paid step adds what it spent to `<project>/costs.json` while it runs: voice (ai33 credits), script planner
 (DeepSeek tokens), clip ranking (Gemini tokens), clip check (only in `segment_check: vlm`). When the video is done the
