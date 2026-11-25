@@ -521,6 +521,7 @@ class Builder:
         self._dup_lock = threading.Lock()
         self._dup = None            # [(id, phash, vec, source, src_id, start, length)]
         self.dupes = 0
+        self.sound_count = {}        # shots added this run: {1: with their own sound, 0: source has no sound}
         self.pages = {}             # category -> next DVIDS results page
         # 2 network / DNS failures in a row pause the whole build (no next file is tried) until Retry is pressed
         # or - auto-continue on - the internet really answers again
@@ -549,9 +550,12 @@ class Builder:
         return d, files
 
     def _seen(self, src_id):
+        """A DVIDS video is never opened twice: it is in the processed list (done / failed / skipped), or the
+        library already holds a shot from it (covers a list that lost rows, e.g. after an index recovery)."""
         with _DB_LOCK:
             con = _db(self.settings)
-            r = con.execute("SELECT 1 FROM videos WHERE source='dvids' AND src_id=?", (src_id,)).fetchone()
+            r = con.execute("SELECT 1 FROM videos WHERE source='dvids' AND src_id=?", (src_id,)).fetchone() or \
+                con.execute("SELECT 1 FROM shots WHERE source='dvids' AND src_id=? LIMIT 1", (src_id,)).fetchone()
             con.close()
         return bool(r)
 
@@ -720,7 +724,7 @@ class Builder:
         return None
 
     def _insert(self, out, kf, source, src_id, src_start, length, title, cat_name, cat_entity, credit, license,
-                page_url, origin, caption=None, src_height=0):
+                page_url, origin, caption=None, src_height=0, from_source=True):
         if not Path(kf).exists():
             Path(out).unlink(missing_ok=True)
             return False
@@ -751,7 +755,11 @@ class Builder:
         action = str(cap.get("action") or "").lower()
         if action not in ACTION_NAMES:
             action = detect_action(" ".join([str(cap.get("caption") or ""), " ".join(map(str, tags)), title]))
-        row = row + (action, n_frames, int(num(src_height)), 1 if has_audio(out) else None)
+        # a build cut keeps the source's own sound (same file, same command): no audio track = the source has none.
+        # A learned shot is a copy of a project clip (maybe from before v0.9.0, cut without sound): no audio there
+        # only means "not checked yet" - "Add sound to old shots" proves and adds it later.
+        sound = 1 if has_audio(out) else (0 if from_source else None)
+        row = row + (action, n_frames, int(num(src_height)), sound)
         with _DB_LOCK:
             con = _db(self.settings)
             try:
@@ -764,6 +772,10 @@ class Builder:
             except sqlite3.IntegrityError:
                 ok = False
             con.close()
+        if ok:
+            with self._dup_lock:
+                key = sound if sound is not None else "later"
+                self.sound_count[key] = self.sound_count.get(key, 0) + 1
         return ok
 
     def build(self, target, categories=None):
@@ -777,6 +789,13 @@ class Builder:
         self.log(f"library build: target {target} shots, {len(cats)} categories, {self.per_video} shots per video, "
                  f"captions: {'on (' + self.captioner.rr.label + ')' if self.captioner.rr else 'off'}; folder {self.dir}")
         backup_index(self.settings)
+        with _DB_LOCK:
+            con = _db(self.settings)
+            used = con.execute("""SELECT COUNT(*) FROM (SELECT src_id FROM videos WHERE source='dvids'
+                                  UNION SELECT src_id FROM shots WHERE source='dvids')""").fetchone()[0]
+            con.close()
+        self.log(f"library build: {used} DVIDS videos are already used - they are never downloaded again; "
+                 f"every new shot is also checked picture by picture against the library; new shots keep their sound")
         self.upgrade_vectors()
         have = stats(self.settings)["shots"]
         if have >= target:
@@ -853,7 +872,9 @@ class Builder:
         if not any(queues.values()) and count[0] < target:
             self.log("no more new DVIDS videos in these categories - add categories or lower the target")
         self.log(f"library build {'stopped' if self.stop.is_set() and count[0] < target else 'done'}: "
-                 f"{count[0]} shots in {(time.time() - t0) / 60:.0f} min; {self.dupes} duplicate shots skipped")
+                 f"{count[0]} shots in {(time.time() - t0) / 60:.0f} min; {self.dupes} duplicate shots skipped; "
+                 f"new shots: {self.sound_count.get(1, 0)} with their own sound, "
+                 f"{self.sound_count.get(0, 0)} from videos that have no sound")
         return count[0]
 
     # -- sound for shots cut before v0.9.0 (they were cut without their audio)
@@ -1067,7 +1088,7 @@ class Builder:
                             length=num(f.get("length")), title=f.get("title") or "", cat_name="learned",
                             cat_entity=sp.get("entity") or "", credit=f.get("credit") or "", license=f.get("license") or "",
                             page_url=f.get("page_url") or "", origin=f"video:{proj.name}", caption=cap,
-                            src_height=num(f.get("src_height"))):
+                            src_height=num(f.get("src_height")), from_source=False):
                 added += 1
         backup_index(self.settings)
         return added

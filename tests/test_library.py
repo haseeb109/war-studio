@@ -560,3 +560,44 @@ def test_full_file_is_not_touched_when_the_small_file_proves_the_shot(settings, 
     assert library.stats(settings)["sound"]["with"] == 1 and real(a)
     assert str(full) not in asked                         # the big file was never opened
     assert int(b.settings.get("library_sound_workers", 8)) == 8
+
+
+def test_new_shots_keep_their_sound_and_no_video_is_opened_twice(settings, tmp_path, monkeypatch):
+    import sqlite3
+    loud = _src(tmp_path / "loud.mp4", 12, audio=SWITCH)                   # 440 Hz until 5 s, then 880 Hz
+    mute = _src(tmp_path / "mute.mp4", 12, video="testsrc")                 # a source without sound
+    b = library.Builder({"DVIDS_API_KEY": "k"}, settings, lambda m: None)
+    assert b.add_shot_from_url(str(loud), 6.0, 3, "F-15E", "F-15E", {}, {"id": "video:1", "title": "F-15E"})
+    assert b.add_shot_from_url(str(mute), 2.0, 3, "F-15E", "F-15E", {}, {"id": "video:2", "title": "F-15E"})
+    with sqlite3.connect(library.db_path(settings)) as con:
+        got = dict(con.execute("SELECT src_id, audio FROM shots"))
+        f1 = con.execute("SELECT file FROM shots WHERE src_id='video:1'").fetchone()[0]
+    assert got == {"video:1": 1, "video:2": 0}                              # nothing left "not checked"
+    from warstudio import sfx
+    x = sfx.load_audio(f1)
+    assert abs(np.fft.rfftfreq(len(x), 1 / sfx.SR)[np.argmax(np.abs(np.fft.rfft(x)))] - 880) < 10   # its own seconds
+    assert b.sound_count == {1: 1, 0: 1}
+    asked = []
+    monkeypatch.setattr(b, "_dvids_asset", lambda vid: asked.append(vid) or ({}, []))
+    b.add_sound()
+    assert asked == []                                                      # "Add sound" has nothing to redo
+    # neither video is in the processed list, but both have shots: never downloaded again
+    assert b._seen("video:1") and b._seen("video:2") and not b._seen("video:3")
+
+
+def test_learned_shot_without_sound_is_left_for_the_proven_sound_job(settings, tmp_path):
+    """A learned shot is a copy of a project clip, maybe cut before clips kept their sound: no audio there does not
+    mean the source is silent - it stays "not checked" so "Add sound to old shots" can prove and add it."""
+    import sqlite3
+    d = Path(settings["library_dir"])
+    d.mkdir(parents=True, exist_ok=True)
+    clip = _cut(_src(tmp_path / "s.mp4", 6, audio=SWITCH), 1.0, 3, d / "learned.mp4")      # picture only
+    from PIL import Image
+    Image.new("RGB", (64, 36)).save(d / "learned.jpg")
+    b = library.Builder({}, settings, lambda m: None)
+    assert b._insert(clip, d / "learned.jpg", source="dvids", src_id="video:5", src_start=1.0, length=3,
+                     title="t", cat_name="learned", cat_entity="", credit="", license="", page_url="",
+                     origin="video:p1", from_source=False)
+    with sqlite3.connect(library.db_path(settings)) as con:
+        assert con.execute("SELECT audio FROM shots WHERE src_id='video:5'").fetchone()[0] is None
+    assert b.sound_count == {"later": 1}

@@ -82,6 +82,15 @@ Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, over
 
 **Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, and the sound design below (from a NexLev study of the channel's latest videos).
 
+## No repeats, sound on every new shot (v0.9.8)
+- A DVIDS video is never downloaded twice: it is skipped when it is in the processed list (done / failed / skipped)
+  **or** when the library already holds a shot from it (covers a list that lost rows in an index recovery). On top,
+  every new shot is still checked against the library picture by picture (duplicates are skipped and counted).
+- New shots are cut from the source's own file with its sound (AAC 128k). A source without sound is marked so at
+  once (`audio = 0`), so "Add sound to old shots" never has to revisit new shots. The build's last log line says how
+  many new shots came with their own sound. (A shot learned from a finished video is a copy of that video's clip;
+  if that clip had no sound it stays "not checked", and "Add sound to old shots" proves and adds it later.)
+
 ## Library index safety (v0.9.4)
 `library/shots/index.db` was by mistake in git from v0.8.0 to v0.9.3, so the Update button stashed the real index
 away and put an empty one back (the shot files stayed on disk). Now the whole `library/shots/` folder is ignored by
