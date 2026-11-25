@@ -110,6 +110,18 @@ def library_retry():
         raise HTTPException(409, str(e))
 
 
+@app.post("/api/library/sound")
+def library_sound(a: LibAuto):
+    """Give the shots cut before v0.9.0 their own sound (audio only, from DVIDS)."""
+    from . import library
+    if not load_keys().get("DVIDS_API_KEY"):
+        raise HTTPException(400, "DVIDS_API_KEY is needed - add it in Settings")
+    try:
+        return library.start_sound(a.on)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
 @app.post("/api/library/auto")
 def library_auto(a: LibAuto):
     from . import library

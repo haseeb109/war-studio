@@ -76,12 +76,15 @@
   },
 
   "footage_audio": {
-    "_note": "The clip's own sound (engines, guns, blasts) at low level on action beats only, ducked under the voice. Clips that sound like speech or come from packages / interviews / briefings are skipped. Turn off with footage_audio=false in settings.",
+    "_note": "Every shot keeps its own sound, ducked under the voice: action shots (engines, guns, blasts) at level/gap/under_voice, all other shots as quiet ambience (ambient block). Clips that sound like speech or come from packages / interviews / briefings are skipped. all_shots=false = action shots only; footage_audio=false in settings = off.",
     "enabled": true,
     "actions": ["takeoff", "landing", "flying", "formation", "launch", "explosion", "firing", "hover", "taxi", "sailing"],
     "level_db": -20,
     "gap_db": -12,
     "under_voice_db": -24,
+    "all_shots": true,
+    "ambient": {"level_db": -20, "gap_db": -18, "under_voice_db": -32},
+    "max_boost_db": 10,
     "fade_seconds": 0.12,
     "skip_title_words": ["package", "interview", "briefing", "press", "remarks", "speech", "conference", "podcast", "news", "town hall", "ceremony", "testimony", "q&a"]
   },

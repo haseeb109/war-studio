@@ -422,3 +422,79 @@ def test_index_recovered_after_update_stashed_it(tmp_path, monkeypatch):
     assert any("recovered: 30 of 30" in m and "git stash@{0}" in m for m in logs)
     assert library.recover_index(s, logs.append, root=repo) == 0               # healthy now: nothing to do
     assert list((shots / "backups").glob("index-before-recover-*.db"))
+
+
+def _media(path, sec, tone=None, size="320x180"):
+    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=s={size}:r=30:d={sec}"]
+    if tone:
+        cmd += ["-f", "lavfi", "-i", f"sine=f={tone}:d={sec}", "-c:a", "aac", "-shortest"]
+    subprocess.run(cmd + ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)], check=True)
+    return path
+
+
+def test_add_sound_to_old_shots(settings, tmp_path, monkeypatch):
+    """Shots cut before v0.9.0 have no sound: the same seconds of the source's audio are muxed in, the picture is
+    copied untouched; silent sources are remembered; shots that already have sound are only marked."""
+    import sqlite3
+    d = Path(settings["library_dir"])
+    d.mkdir(parents=True, exist_ok=True)
+    src_loud, src_mute = _media(tmp_path / "src1.mp4", 12, tone=440), _media(tmp_path / "src2.mp4", 12)
+    shots = {"a": ("video:1", 2.0), "b": ("video:1", 7.0), "c": ("video:2", 3.0), "d": ("video:3", 1.0)}
+    for name, (vid, st) in shots.items():
+        _add(settings, name, "F-15E", "jet")
+        _media(d / f"{name}.mp4", 4, tone=300 if name == "d" else None)       # d was cut by v0.9.0 (has sound)
+        with sqlite3.connect(library.db_path(settings)) as con:
+            con.execute("UPDATE shots SET src_id = ?, src_start = ?, length = 4 WHERE file = ?",
+                        (vid, st, str(d / f"{name}.mp4")))
+    with sqlite3.connect(library.db_path(settings)) as con:                    # as an old index looks
+        con.execute("UPDATE shots SET audio = NULL")
+    asked = []
+    files = {"video:1": [{"src": str(src_loud), "height": 360}], "video:2": [{"src": str(src_mute), "height": 360}]}
+    b = library.Builder({"DVIDS_API_KEY": "k"}, settings, lambda m: None)
+    monkeypatch.setattr(b, "_dvids_asset", lambda vid: (asked.append(vid) or {}, files.get(vid, [])))
+    monkeypatch.setattr(library, "pick_files", lambda fs: (fs[0]["src"], fs[0]["src"], 360) if fs else (None, None, 0))
+    before = library.duration(d / "a.mp4")
+    b.add_sound(workers=2)
+    assert sorted(asked) == ["video:1", "video:2"]                            # d needed no download
+    with sqlite3.connect(library.db_path(settings)) as con:
+        got = {Path(f).stem: a for f, a in con.execute("SELECT file, audio FROM shots")}
+    assert got == {"a": 1, "b": 1, "c": 0, "d": 1}
+    assert library.has_audio(d / "a.mp4") and not library.has_audio(d / "c.mp4")
+    assert abs(library.duration(d / "a.mp4") - before) < 0.2                # picture untouched, same length
+    assert not list(d.glob("*.part.*"))
+    assert library.stats(settings)["sound"] == {"with": 3, "none": 1, "unknown": 0}
+    b.add_sound()                                                             # resumable: nothing left to do
+    assert sorted(asked) == ["video:1", "video:2"]
+
+
+def test_retry_restarts_the_sound_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(library, "STATUS_FILE", tmp_path / "st.json")
+    calls = []
+    monkeypatch.setattr(library, "start_sound", lambda auto=True: calls.append(auto))
+    write_json(tmp_path / "st.json", {"state": "stopped", "kind": "sound", "params": {"kind": "sound", "auto_continue": False}})
+    assert library.retry_build()["action"] == "restarted" and calls == [False]
+
+
+def test_added_sound_is_from_the_same_seconds_as_the_picture(settings, tmp_path, monkeypatch):
+    import sqlite3
+    d = Path(settings["library_dir"])
+    d.mkdir(parents=True, exist_ok=True)
+    src = tmp_path / "src.mp4"                       # 440 Hz for the first 5 s, then 880 Hz
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=12", "-f", "lavfi",
+                    "-i", "aevalsrc='0.5*sin(2*PI*if(lt(t,5),440,880)*t)':s=48000:d=12", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)], check=True)
+    for name, st in (("early", 1.0), ("late", 7.0)):
+        _add(settings, name, "F-15E", "jet")
+        _media(d / f"{name}.mp4", 3)
+        with sqlite3.connect(library.db_path(settings)) as con:
+            con.execute("UPDATE shots SET src_id = 'video:9', src_start = ?, length = 3, audio = NULL WHERE file = ?",
+                        (st, str(d / f"{name}.mp4")))
+    b = library.Builder({"DVIDS_API_KEY": "k"}, settings, lambda m: None)
+    monkeypatch.setattr(b, "_dvids_asset", lambda vid: ({}, [{"src": str(src)}]))
+    monkeypatch.setattr(library, "pick_files", lambda fs: (fs[0]["src"], fs[0]["src"], 360))
+    b.add_sound()
+    from warstudio import sfx
+    for name, hz in (("early", 440), ("late", 880)):
+        x = sfx.load_audio(d / f"{name}.mp4")
+        f = np.fft.rfftfreq(len(x), 1 / sfx.SR)[np.argmax(np.abs(np.fft.rfft(x)))]
+        assert abs(f - hz) < 10, (name, f)

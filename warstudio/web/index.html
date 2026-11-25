@@ -264,6 +264,7 @@
         <div><label>Stop at library size (GB)</label><input id="lbGb" type="number" value="100" min="5" step="10"></div>
         <div style="flex:0"><button class="btn" id="lbStart">Build / top up</button></div>
         <div style="flex:0"><button class="btn ghost" id="lbStop">Stop</button></div>
+        <div style="flex:0"><button class="btn ghost" id="lbSound" title="Shots cut before v0.9.0 have no sound: cut their audio (only) from DVIDS and add it. About 1 MB per shot.">Add sound to old shots</button></div>
         <div style="flex:0"><button class="btn ghost" id="lbRetry" disabled title="Paused by the internet: continue from the same file. Stopped build: start again where it stopped.">Retry</button></div>
       </div>
       <label style="display:flex;gap:6px;align-items:center;color:var(--text);font-size:13px;margin:-6px 0 12px">
@@ -481,8 +482,11 @@ async function loadLibrary() {
   const per = st.avg_mb_per_shot || 9;
   $("#lbStats").innerHTML = `<b>${st.shots}</b> shots · ${st.gb} GB (~${per} MB per shot, 100 GB ≈ ${Math.round(100000 / per).toLocaleString()} shots) ·
     ${st.learned_from_videos} learned from your videos ·
-    DVIDS videos processed: ${vids} · ${st.free_gb} GB free on disk<br>Folder: ${esc(st.dir)}` +
-    (job.state ? `<br>Build: <b>${esc(job.state)}</b>${job.running ? " (running)" : ""}${job.target ? ` · ${job.shots || st.shots}/${job.target}` : ""}` : "") +
+    DVIDS videos processed: ${vids} · ${st.free_gb} GB free on disk` +
+    (st.sound ? `<br>Shot sound: <b>${st.sound.with}</b> with their own sound · ${st.sound.none} from silent videos` +
+      (st.sound.unknown ? ` · <b style="color:var(--yel)">${st.sound.unknown} without sound yet</b> (press "Add sound to old shots")` : "") : "") +
+    `<br>Folder: ${esc(st.dir)}` +
+    (job.state ? `<br>${job.kind === "sound" ? "Adding sound" : "Build"}: <b>${esc(job.state)}</b>${job.running ? " (running)" : ""}${job.target ? ` · ${job.shots || st.shots}/${job.target}` : ""}` : "") +
     (job.running && job.net === "paused" ? `<br><b style="color:var(--red,#e5534b)">&#9208; PAUSED: ${esc(job.net_reason || "internet problem")}</b>
       - nothing new is tried. ${job.net_auto === false ? "Press <b>Retry</b> when the internet is back."
       : "It continues by itself when the internet is really back, or press <b>Retry</b>."}` :
@@ -490,6 +494,7 @@ async function loadLibrary() {
   $("#lbLog").textContent = (job.log || []).join("\n");
   $("#lbLog").scrollTop = 1e9;
   $("#lbStart").disabled = !!job.running;
+  $("#lbSound").disabled = !!job.running || !(st.sound && st.sound.unknown);
   const canRestart = !job.running && ["stopped", "error", "running"].includes(job.state);
   $("#lbRetry").disabled = !((job.running && job.net === "paused") || canRestart);
   $("#lbRetry").textContent = canRestart ? "Retry / continue" : "Retry";
@@ -511,6 +516,13 @@ $("#lbRetry").onclick = async () => {
     const r = await api("/api/library/retry", {});
     toast({resumed: "Continuing from the same file", restarted: "Build started again - it carries on where it stopped",
            running: "The build is running - nothing to retry", nothing: "Nothing to retry"}[r.action] || "OK");
+  } catch (e) { toast(e.message); }
+  loadLibrary();
+};
+$("#lbSound").onclick = async () => {
+  try {
+    await api("/api/library/sound", {on: $("#lbAuto").checked});
+    toast("Adding sound to the old shots - about an hour for 5000 shots; Stop / Retry work as for the build");
   } catch (e) { toast(e.message); }
   loadLibrary();
 };

@@ -244,8 +244,11 @@ def test_plan_footage_audio_filters():
     fetched = {str(i): {"file": __file__, "title": "F-15E B-roll", "source": "dvids"} for i in range(4)}
     fetched["2"]["title"] = "Interview with the pilot"
     got = sfx.plan_footage_audio(beats, sp, {}, fetched, STYLE, 12.0)
-    assert [g["bid"] for g in got] == [0]                       # console: no; interview: no; numbers: no
+    # every shot keeps its sound: takeoff = action, console + numbers = quiet ambience, interview = left out
+    assert [(g["bid"], g["kind"]) for g in got] == [(0, "action"), (1, "ambient"), (3, "ambient")]
     assert got[0]["dur"] == 3.0
+    only_action = dict(STYLE, footage_audio=dict(STYLE["footage_audio"], all_shots=False))
+    assert [g["bid"] for g in sfx.plan_footage_audio(beats, sp, {}, fetched, only_action, 12.0)] == [0]
     assert sfx.plan_footage_audio(beats, sp, {}, fetched, STYLE, 12.0, {"footage_audio": False}) == []
 
 
@@ -263,7 +266,30 @@ def test_footage_sound_mixed_and_speech_skipped(tmp_path):
     x = sfx.load_audio(tmp_path / "f.wav")
     assert _rms(x, 0.5, 2.5) > 0.005                            # engine sound is in the mix
     assert _rms(x, 4.0, 6.0) < 1e-4                             # talking clip skipped
-    assert any("1 action clip" in m and "speech" in m and "no sound" in m for m in logs)
+    assert any("1 shot(s) keep their own sound (1 action, 0 ambient)" in m and "speech" in m and "no sound" in m
+               for m in logs)
+
+
+def test_ambient_shot_sound_sits_under_the_voice(tmp_path):
+    rng = np.random.default_rng(1)
+    noise = sfx._lp(rng.standard_normal(6 * SR), 6) * 0.3
+    clip = _clip(tmp_path / "amb.mp4", noise)
+    vo = np.zeros(12 * SR, dtype=np.float32)
+    vo[:3 * SR] = (np.sin(2 * np.pi * 150 * np.arange(3 * SR) / SR) * 0.3).astype(np.float32)   # voice 0-3 s
+    sfx.write_wav(tmp_path / "vo.wav", vo)
+    st = dict(STYLE, music=dict(STYLE["music"], fallback="none"))
+    res = {}
+    for kind in ("action", "ambient"):
+        items = [{"bid": 0, "file": clip, "t": 0.0, "dur": 3.0, "kind": kind},
+                 {"bid": 1, "file": clip, "t": 6.0, "dur": 3.0, "kind": kind}]
+        sfx.mix(tmp_path / "vo.wav", [], 12.0, st, tmp_path / f"{kind}.wav", footage=items)
+        x = sfx.load_audio(tmp_path / f"{kind}.wav")
+        x[:len(vo)] -= vo[:len(x)]
+        res[kind] = (_rms(x, 0.5, 2.5), _rms(x, 6.5, 8.5))        # (under the voice, in a pause)
+    assert res["ambient"][0] < res["action"][0] * 0.5 and res["ambient"][1] < res["action"][1]
+    assert res["ambient"][0] < res["ambient"][1] * 0.2        # far under the narrator, audible in the pause
+    vo_rms = 0.3 / np.sqrt(2)
+    assert res["ambient"][0] < vo_rms * 10 ** (-28 / 20)       # the voice is never covered
 
 
 def test_master_prompt_has_sound_cues_not_sfx():

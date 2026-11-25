@@ -163,6 +163,10 @@ def run_step(proj, keys, style, log, settings=None):
                 duration(out)
             except Exception:
                 out.unlink()                      # a broken file from an older version: fetch again
+        if out.exists() and p.get("source") == "library":
+            from ..library import has_audio
+            if not has_audio(out) and has_audio(p["video_url"]):
+                out.unlink()                      # the library shot got its sound after this copy was cut
         if not out.exists():
             try:
                 fetch_one(p, start, need, out, W, H, fps)

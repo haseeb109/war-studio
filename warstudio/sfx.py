@@ -19,8 +19,9 @@ MUSIC (mix -> _mix_music)
   action = louder (+ pulse layer on the generated bed); a 2 s swell into every attack / reveal; a dip under
   cliffhanger chords; ducked under the voice (-20 dB) and lifted in pauses (-14 dB); fade-out at the end.
 FOOTAGE AUDIO (mix -> _mix_footage)
-  the clip's own sound (engines, guns, blasts) at low level on action beats only, ducked under the voice.
-  Clips that sound like speech, or come from packages / interviews / briefings, are skipped.
+  every shot keeps its own sound, low and ducked under the voice: action shots (engines, guns, blasts) a little
+  up, all other shots as quiet ambience (well under the narrator, a bit up in pauses). Clips that sound like
+  speech, or come from packages / interviews / briefings, are skipped - the voiceover always stays clear.
 
 Your own SFX files win: drop .wav/.mp3 into assets/sfx/<category>/ (e.g. assets/sfx/explosion/).
 """
@@ -565,11 +566,13 @@ def plan_music(beats, specs, overlays, style, picks=None):
 
 
 def plan_footage_audio(beats, specs, picks, fetched, style, total, settings=None):
-    """Beats whose clip keeps its own sound: action shots only, never packages / interviews / numbers."""
+    """Every shot keeps its own sound, low: action shots (engines, guns, blasts) a little up, every other shot as
+    quiet ambience. Packages / interviews / briefings are left out (talking), numbers beats stay ambient."""
     fa = style.get("footage_audio", {})
     on = (settings or {}).get("footage_audio", fa.get("enabled", True))
     if str(on).lower() in ("false", "0", "no", "off"):
         return []
+    every = str(fa.get("all_shots", True)).lower() not in ("false", "0", "no", "off")
     spec = {s["id"]: s for s in specs}
     actions = set(fa.get("actions", []))
     skip = [w.lower() for w in fa.get("skip_title_words", [])]
@@ -580,7 +583,8 @@ def plan_footage_audio(beats, specs, picks, fetched, style, total, settings=None
             continue
         s = spec.get(b["id"], {})
         pick = (picks or {}).get(str(b["id"]))
-        if shot_action(s, pick) not in actions or is_quiet(b, s):
+        kind = "action" if shot_action(s, pick) in actions and not is_quiet(b, s) else "ambient"
+        if kind == "ambient" and not every:
             continue
         title = f"{f.get('title') or ''} {(pick or {}).get('title') or ''}".lower()
         if any(w in title for w in skip):
@@ -588,7 +592,7 @@ def plan_footage_audio(beats, specs, picks, fetched, style, total, settings=None
         end = float(total) if i == len(beats) - 1 else float(beats[i + 1]["start"])
         if end - b["start"] >= 0.5:
             out.append({"bid": b["id"], "file": f["file"], "t": round(float(b["start"]), 3),
-                        "dur": round(end - float(b["start"]), 3)})
+                        "dur": round(end - float(b["start"]), 3), "kind": kind})
     return out
 
 
@@ -649,8 +653,10 @@ def _mix_footage(out, items, talk, fa, log):
 
     with ThreadPoolExecutor(8) as ex:
         decoded = list(ex.map(dec, items))
-    kept = silent = talky = 0
+    kept, kinds, silent, talky = 0, {"action": 0, "ambient": 0}, 0, 0
     fade = max(1, int(float(fa.get("fade_seconds", 0.12)) * SR))
+    amb = fa.get("ambient", {})
+    boost = db(float(fa.get("max_boost_db", 10)))
     for it, x in decoded:
         if x is None or len(x) < int(0.3 * SR):
             silent += 1
@@ -662,15 +668,20 @@ def _mix_footage(out, items, talk, fa, log):
         if speech_like(x):
             talky += 1
             continue
-        x = (x / rms * db(float(fa.get("level_db", -20)))).astype(np.float32)
+        kind = it.get("kind", "action")
+        lv = amb if kind == "ambient" else fa
+        # same loudness for every clip, but a quiet clip is never pushed up by more than max_boost_db (hiss)
+        x = (x * min(db(float(lv.get("level_db", fa.get("level_db", -20)))) / rms, boost)).astype(np.float32)
         f = min(fade, len(x) // 2)
         x[:f] *= np.linspace(0, 1, f, dtype=np.float32)
         x[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
         s = int(float(it["t"]) * SR)
-        g = _duck(talk, np.arange(s, s + len(x)), float(fa.get("gap_db", -12)), float(fa.get("under_voice_db", -24)))
+        g = _duck(talk, np.arange(s, s + len(x)), float(lv.get("gap_db", -12)), float(lv.get("under_voice_db", -24)))
         _add(out, x * g, s)
         kept += 1
-    log(f"footage sound: {kept} action clip(s) keep their own sound"
+        kinds[kind] = kinds.get(kind, 0) + 1
+    log(f"footage sound: {kept} shot(s) keep their own sound ({kinds.get('action', 0)} action, "
+        f"{kinds.get('ambient', 0)} ambient)"
         + (f", {talky} skipped (sounded like speech)" if talky else "")
         + (f", {silent} had no sound" if silent else ""))
 

@@ -102,7 +102,7 @@ def _db(settings=None):
     """)
     cols = [r[1] for r in con.execute("PRAGMA table_info(shots)")]
     for col, typ in (("phash", "TEXT"), ("favorite", "INTEGER DEFAULT 0"), ("action", "TEXT"),
-                     ("frames", "INTEGER DEFAULT 1"), ("src_height", "INTEGER")):
+                     ("frames", "INTEGER DEFAULT 1"), ("src_height", "INTEGER"), ("audio", "INTEGER")):
         if col not in cols:
             con.execute(f"ALTER TABLE shots ADD COLUMN {col} {typ}")
     con.execute("""CREATE TABLE IF NOT EXISTS deleted(phash TEXT, source TEXT, src_id TEXT, src_start REAL,
@@ -167,11 +167,15 @@ def stats(settings=None):
         learned = con.execute("SELECT COUNT(*) FROM shots WHERE origin LIKE 'video:%'").fetchone()[0]
         favs = con.execute("SELECT COUNT(*) FROM shots WHERE favorite = 1").fetchone()[0]
         deleted = con.execute("SELECT COUNT(*) FROM deleted").fetchone()[0]
+        sound = {"with": con.execute("SELECT COUNT(*) FROM shots WHERE audio = 1").fetchone()[0],
+                 "none": con.execute("SELECT COUNT(*) FROM shots WHERE audio = 0").fetchone()[0],
+                 "unknown": con.execute("SELECT COUNT(*) FROM shots WHERE audio IS NULL").fetchone()[0]}
         con.close()
     size = sum(f.stat().st_size for f in lib_dir(settings).glob("*.mp4"))
     free = shutil.disk_usage(lib_dir(settings)).free
     return {"shots": n, "by_category": cats, "videos": vids, "learned_from_videos": learned,
             "avg_mb_per_shot": round(size / 1e6 / n, 1) if n else 9.0, "favorites": favs, "deleted": deleted,
+            "sound": sound,
             "gb": round(size / 1e9, 2), "free_gb": round(free / 1e9, 1), "dir": str(lib_dir(settings))}
 
 
@@ -354,6 +358,19 @@ def plan_shots(cuts, dur, min_start=0.0, min_len=3.0, max_len=8.0, pad=0.3):
 
 
 MIN_SOURCE_HEIGHT = 720
+
+
+def has_audio(path):
+    """True when the media file (local path or URL) has an audio stream."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", *ffmpeg_net_args(path), "-select_streams", "a",
+                            "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+                           capture_output=True, text=True, timeout=90)
+    except Exception:
+        return False
+    if r.returncode != 0 and is_network_error(RuntimeError(r.stderr)):
+        raise RuntimeError(f"ffprobe network error: {r.stderr[-200:]}")
+    return bool(r.stdout.strip())
 
 
 def pick_files(files):
@@ -659,14 +676,14 @@ class Builder:
         action = str(cap.get("action") or "").lower()
         if action not in ACTION_NAMES:
             action = detect_action(" ".join([str(cap.get("caption") or ""), " ".join(map(str, tags)), title]))
-        row = row + (action, n_frames, int(num(src_height)))
+        row = row + (action, n_frames, int(num(src_height)), 1 if has_audio(out) else None)
         with _DB_LOCK:
             con = _db(self.settings)
             try:
                 con.execute("""INSERT INTO shots(source, src_id, title, category, src_start, length, file, keyframe,
                     caption, entity, tags, shot_type, quality, credit, license, page_url, emb, added, origin, phash,
-                    action, frames, src_height)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
+                    action, frames, src_height, audio)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
                 con.commit()
                 ok = True
             except sqlite3.IntegrityError:
@@ -763,6 +780,117 @@ class Builder:
         self.log(f"library build {'stopped' if self.stop.is_set() and count[0] < target else 'done'}: "
                  f"{count[0]} shots in {(time.time() - t0) / 60:.0f} min; {self.dupes} duplicate shots skipped")
         return count[0]
+
+    # -- sound for shots cut before v0.9.0 (they were cut without their audio)
+    def add_sound(self, workers=4):
+        """Give every DVIDS shot its own sound back: the same seconds are cut, audio only, from the smallest
+        rendition of its source video and muxed into the shot (the picture is not touched). Sources without sound
+        are remembered (audio = 0). Resumable: only shots not done yet are visited."""
+        from concurrent.futures import ThreadPoolExecutor
+        with _DB_LOCK:
+            con = _db(self.settings)
+            rows = [dict(r) for r in con.execute(
+                "SELECT id, source, src_id, src_start, length, file FROM shots WHERE audio IS NULL")]
+            con.close()
+        rows = [r for r in rows if Path(r["file"]).exists()]
+        if not rows:
+            self.log("sound: every shot already has its sound (or its source has none)")
+            return 0
+        local = 0                                  # shots cut by v0.9.0+ already carry their sound
+        for r in rows:
+            if has_audio(r["file"]):
+                self._set_audio([r["id"]], 1)
+                local += 1
+        todo = [r for r in rows if r["source"] == "dvids" and not self._audio_known(r["id"])]
+        other = [r["id"] for r in rows if r["source"] != "dvids" and not self._audio_known(r["id"])]
+        if other:
+            self._set_audio(other, 0)
+        groups = {}
+        for r in todo:
+            groups.setdefault(r["src_id"], []).append(r)
+        total = len(todo)
+        self.log(f"sound: {local} shots already had sound; {total} shots from {len(groups)} DVIDS videos get theirs "
+                 f"now (audio only, from the smallest file of each video)")
+        done, silent, t0 = [0], [0], time.time()
+        lock = threading.Lock()
+
+        def one(item):
+            src_id, shots = item
+            if self.stop.is_set() or not self.gate.wait():
+                return
+            try:
+                _, files = self._dvids_asset(src_id)
+                proxy_url, full_url, _ = pick_files(files)
+                url = proxy_url or full_url
+                if not url or not with_net_retry(lambda: has_audio(url), self.log, self.stop,
+                                                 what=f"sound check {src_id}", gate=self.gate):
+                    self._set_audio([r["id"] for r in shots], 0)
+                    with lock:
+                        silent[0] += len(shots)
+                        done[0] += len(shots)
+                    return
+                for r in shots:
+                    if self.stop.is_set():
+                        return
+                    self._mux_sound(r, url)
+                    with lock:
+                        done[0] += 1
+            except Exception as e:
+                if self.stop.is_set():
+                    return
+                self.log(f"  sound {src_id}: skipped this time ({str(e)[-120:]})")
+                return
+            with lock:
+                d, sl = done[0], silent[0]
+            rate = d / max(time.time() - t0, 1) * 3600
+            self.log(f"  sound: {d}/{total} shots done (~{rate:.0f}/hour), {sl} from videos without sound")
+            self.status(shots=d, target=total, progress=min(1.0, d / max(total, 1)))
+
+        with ThreadPoolExecutor(workers) as ex:
+            list(ex.map(one, list(groups.items())))
+        with _DB_LOCK:
+            con = _db(self.settings)
+            have = con.execute("SELECT COUNT(*) FROM shots WHERE audio = 1").fetchone()[0]
+            none = con.execute("SELECT COUNT(*) FROM shots WHERE audio = 0").fetchone()[0]
+            left = con.execute("SELECT COUNT(*) FROM shots WHERE audio IS NULL").fetchone()[0]
+            con.close()
+        self.log(f"sound {'stopped' if self.stop.is_set() else 'done'}: {have} shots have their own sound, "
+                 f"{none} come from videos without sound" + (f", {left} still to do (press Retry)" if left else ""))
+        return done[0]
+
+    def _audio_known(self, shot_id):
+        with _DB_LOCK:
+            con = _db(self.settings)
+            v = con.execute("SELECT audio FROM shots WHERE id = ?", (shot_id,)).fetchone()
+            con.close()
+        return v is not None and v[0] is not None
+
+    def _set_audio(self, ids, val):
+        with _DB_LOCK:
+            con = _db(self.settings)
+            con.executemany("UPDATE shots SET audio = ? WHERE id = ?", [(val, i) for i in ids])
+            con.commit()
+            con.close()
+
+    def _mux_sound(self, r, url):
+        f = Path(r["file"])
+        aud = f.with_name(f.stem + ".sound.part.m4a")
+        tmp = f.with_name(f.stem + ".sound.part.mp4")
+        try:
+            def cut():
+                run(["ffmpeg", "-y", "-loglevel", "error", *ffmpeg_net_args(url), "-ss", f"{num(r['src_start'])}",
+                     "-i", url, "-t", f"{num(r['length'])}", "-vn", "-map", "0:a:0", "-c:a", "aac", "-b:a", "128k",
+                     "-ar", "48000", "-ac", "2", str(aud)], timeout=300)
+            with_net_retry(cut, self.log, self.stop, what=f"sound {f.name}", gate=self.gate)
+            run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(f), "-i", str(aud), "-map", "0:v:0", "-map", "1:a:0",
+                 "-c", "copy", "-shortest", "-movflags", "+faststart", str(tmp)], timeout=120)
+            if duration(tmp) < num(r["length"]) * 0.8 or not has_audio(tmp):
+                raise RuntimeError("muxed shot is too short")
+            tmp.replace(f)
+            self._set_audio([r["id"]], 1)
+        finally:
+            aud.unlink(missing_ok=True)
+            tmp.unlink(missing_ok=True)
 
     # -- learning from a finished video
     def learn_from_project(self, proj):
@@ -1033,19 +1161,15 @@ def job_status():
     return st
 
 
-def start_build(target, categories=None, per_video=None, max_gb=None, auto_continue=True):
+def _start_job(params, work, settings_extra=None):
+    """Run one library job in the background (build or add-sound): status file, log, keep-awake, pause gate."""
     from .config import load_keys, load_settings
     if _JOB["thread"] and _JOB["thread"].is_alive():
-        raise RuntimeError("a library build is already running")
-    settings = load_settings()
-    if per_video:
-        settings = dict(settings, library_shots_per_video=int(per_video))
-    if max_gb:
-        settings = dict(settings, library_max_gb=float(max_gb))
-    settings = dict(settings, library_auto_continue=bool(auto_continue))
-    st = {"state": "running", "started": time.time(), "target": int(target), "log": [], "progress": 0, "net": "",
-          "params": {"target": int(target), "categories": categories, "per_video": per_video, "max_gb": max_gb,
-                     "auto_continue": bool(auto_continue)}}
+        raise RuntimeError("a library job is already running")
+    settings = dict(load_settings(), **(settings_extra or {}))
+    settings["library_auto_continue"] = bool(params.get("auto_continue", True))
+    st = {"state": "running", "started": time.time(), "target": int(params.get("target") or 0), "log": [],
+          "progress": 0, "net": "", "kind": params.get("kind", "build"), "params": params}
     write_json(STATUS_FILE, st)
     lock = threading.Lock()
 
@@ -1068,9 +1192,8 @@ def start_build(target, categories=None, per_video=None, max_gb=None, auto_conti
         try:
             b = Builder(load_keys(), settings, log, _JOB["stop"], status)
             _JOB["gate"] = b.gate
-            n = b.build(int(target), categories)
-            status(state="stopped" if _JOB["stop"].is_set() and n < int(target) else "done", shots=n,
-                   finished=time.time(), net="")
+            finished = work(b)
+            status(state="stopped" if _JOB["stop"].is_set() and not finished else "done", finished=time.time(), net="")
         except Exception as e:
             import traceback
             log(f"ERROR: {e}")
@@ -1084,6 +1207,41 @@ def start_build(target, categories=None, per_video=None, max_gb=None, auto_conti
     _JOB["thread"] = threading.Thread(target=run, daemon=True)
     _JOB["thread"].start()
     return st
+
+
+def start_build(target, categories=None, per_video=None, max_gb=None, auto_continue=True):
+    extra = {}
+    if per_video:
+        extra["library_shots_per_video"] = int(per_video)
+    if max_gb:
+        extra["library_max_gb"] = float(max_gb)
+    params = {"kind": "build", "target": int(target), "categories": categories, "per_video": per_video,
+              "max_gb": max_gb, "auto_continue": bool(auto_continue)}
+
+    def work(b):
+        n = b.build(int(target), categories)
+        b.status(shots=n)
+        return n >= int(target)
+    return _start_job(params, work, extra)
+
+
+def start_sound(auto_continue=True):
+    """Give the shots cut before v0.9.0 their own sound (audio only, from DVIDS)."""
+    def work(b):
+        b.add_sound()
+        with _DB_LOCK:
+            con = _db(b.settings)
+            left = con.execute("SELECT COUNT(*) FROM shots WHERE audio IS NULL").fetchone()[0]
+            con.close()
+        return left == 0
+    return _start_job({"kind": "sound", "auto_continue": bool(auto_continue)}, work)
+
+
+def _restart_from(p, st):
+    if p.get("kind") == "sound":
+        return start_sound(p.get("auto_continue", True))
+    return start_build(p.get("target") or st.get("target") or 1000, p.get("categories"), p.get("per_video"),
+                       p.get("max_gb"), p.get("auto_continue", True))
 
 
 def stop_build():
@@ -1102,9 +1260,9 @@ def retry_build():
         return {"action": "running", "job": job_status()}
     st = read_json(STATUS_FILE, {}) or {}
     p = st.get("params") or {}
-    if st.get("state") in ("stopped", "error", "running") and (p.get("target") or st.get("target")):
-        start_build(p.get("target") or st.get("target"), p.get("categories"), p.get("per_video"), p.get("max_gb"),
-                    p.get("auto_continue", True))
+    if st.get("state") in ("stopped", "error", "running") and (p.get("kind") == "sound" or p.get("target")
+                                                               or st.get("target")):
+        _restart_from(p, st)
         return {"action": "restarted", "job": job_status()}
     return {"action": "nothing", "job": job_status()}
 
@@ -1146,8 +1304,7 @@ def resume_if_interrupted(settings=None):
         return False
     p = st.get("params") or {}
     try:
-        start_build(p.get("target") or st.get("target") or 1000, p.get("categories"), p.get("per_video"),
-                    p.get("max_gb"), p.get("auto_continue", True))
+        _restart_from(p, st)
         return True
     except Exception:
         return False
