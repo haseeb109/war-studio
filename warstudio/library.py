@@ -698,6 +698,7 @@ class Builder:
         count = [have]
         t0 = time.time()
         retry_later = []
+        interrupted = {}
 
         def job(item):
             name, r = item
@@ -706,12 +707,15 @@ class Builder:
             try:
                 n = self.process_video(by_name[name], r)
             except Exception as e:
-                if is_network_error(e) or self.stop.is_set():
-                    # a connection problem is not the video's fault: it goes back in the queue
+                if self.stop.is_set() or (is_network_error(e) and interrupted.get(r["id"], 0) < 3):
+                    # a connection problem is not the video's fault: it goes back in the queue (3 times at most,
+                    # so one broken video can never loop forever)
                     with lock:
                         retry_later.append(item)
+                        interrupted[r["id"]] = interrupted.get(r["id"], 0) + 1
                     if not self.stop.is_set():
-                        self.log(f"  {name}: video {r['id']} interrupted by the network - will be retried")
+                        self.log(f"  {name}: video {r['id']} interrupted by the network - will be retried "
+                                 f"({interrupted[r['id']]}/3)")
                     return
                 self._mark(r["id"], name, "failed", note=str(e)[-200:])
                 self.log(f"  {name}: video {r['id']} failed ({str(e)[-100:]})")

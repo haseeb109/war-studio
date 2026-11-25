@@ -189,8 +189,10 @@ sentences are cut at clause words / spaces, slivers under 1 s are merged, and a 
 
 ## Internet drops (v0.8.4)
 - **Library build**: when the internet goes, the build waits and checks every **5 s**, then continues by itself
-  (the Library tab shows "waiting for internet"). A video interrupted by the network goes back in the queue -
-  it is never marked failed. Preview files resume from the bytes already saved (HTTP Range). ffmpeg reconnects
+  (the Library tab shows "waiting for internet"). "Back" means a named host resolves and answers (v0.9.1: a raw
+  IP is not enough, because the router's DNS can lag a minute behind the connection). DNS errors get ~60 s of extra
+  tries before they count. One outage is logged once, not once per worker. A video interrupted by the network
+  goes back in the queue (up to 3 times, then it is marked failed so it can never loop). Preview files resume from the bytes already saved (HTTP Range). ffmpeg reconnects
   on its own after a drop and gives up on a stalled read after 30 s (then retried).
 - **Mac sleep** is blocked while the library builds (`caffeinate`; keep the lid open on battery Macs).
 - **App closed / Mac restarted mid-build**: the build continues automatically when WarStudio starts

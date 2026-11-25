@@ -146,3 +146,74 @@ def test_resume_if_interrupted(tmp_path, monkeypatch):
     assert library.resume_if_interrupted({}) is True and got == {"t": 5000, "p": 4, "g": 100}
     util.write_json(tmp_path / "st.json", {"state": "done"})
     assert library.resume_if_interrupted({}) is False
+
+
+def test_online_needs_dns_not_just_an_ip(monkeypatch):
+    import httpx
+    asked = []
+
+    def head(url, **k):
+        asked.append(url)
+        raise httpx.ConnectError("[Errno 8] nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(httpx, "head", head)
+    assert util.online() is False
+    assert all("://1.1.1.1" not in u for u in asked)            # every check goes through a host name
+
+
+def test_dns_errors_get_a_grace_minute_before_counting():
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] <= 8:                                      # DNS lags ~40 s after the connection is back
+            raise OSError("[Errno 8] nodename nor servname provided, or not known")
+        return "ok"
+
+    logs, slept = [], []
+    assert util.with_net_retry(fn, logs.append, sleep=slept.append, is_online=lambda: True, online_tries=3) == "ok"
+    assert len(slept) == 8 and sum("DNS" in m for m in logs) == 1
+
+
+def test_outage_logged_once_for_many_threads():
+    import threading
+    state = {"up": False}
+    logs = []
+    gate = threading.Barrier(3)
+
+    def worker():
+        gate.wait()
+        util.wait_for_internet(logs.append, sleep=lambda s: None, is_online=lambda: state["up"])
+
+    ts = [threading.Thread(target=worker) for _ in range(3)]
+    for t in ts:
+        t.start()
+    import time
+    time.sleep(0.2)
+    state["up"] = True
+    for t in ts:
+        t.join(5)
+    assert sum("internet is down" in m for m in logs) == 1
+    assert sum("internet is back" in m for m in logs) == 1
+
+
+def test_library_gives_up_on_a_video_after_three_interruptions(tmp_path, monkeypatch):
+    from warstudio import library
+    s = {"library_dir": str(tmp_path / "lib"), "encoder": "libx264", "library_captions": "off"}
+    monkeypatch.setattr(library, "STATUS_FILE", tmp_path / "st.json")
+    monkeypatch.setattr(library, "wait_for_internet", lambda *a, **k: True)
+    b = library.Builder({"DVIDS_API_KEY": "k"}, s, lambda m: None)
+    monkeypatch.setattr(b, "candidates", lambda q, want=12, max_page=40: [{"id": "video:7", "title": "t"}]
+                        if not b.pages.get(q) else [])
+    tries = []
+
+    def process(cat, r):
+        tries.append(r["id"])
+        b.pages[cat[1]] = 99
+        raise httpx.ConnectError("network is unreachable")
+    monkeypatch.setattr(b, "process_video", process)
+    monkeypatch.setattr(b, "upgrade_vectors", lambda: 0)
+    monkeypatch.setattr(library, "Captioner", lambda *a, **k: type("C", (), {"rr": None})())
+    b.build(1, categories=["F-15E Strike Eagle"])
+    assert len(tries) == 4                                     # first try + 3 re-queues, then marked failed
+    assert library.stats(s)["videos"].get("failed") == 1

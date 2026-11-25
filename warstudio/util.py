@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -113,10 +114,23 @@ def is_network_error(e):
     return any(w in msg for w in NET_ERR_WORDS)
 
 
+DNS_ERR_WORDS = ("nodename nor servname", "name resolution", "could not resolve", "failed to resolve",
+                 "name or service not known", "errno 8", "getaddrinfo")
+DNS_GRACE = 12           # DNS errors right after an outage: up to 12 extra tries (~60 s) before they count
+_NET_LOCK = threading.Lock()
+_NET = {"down_since": None}  # one outage shared by every worker thread: logged once, not once per thread
+
+
+def is_dns_error(e):
+    msg = str(e).lower()
+    return any(w in msg for w in DNS_ERR_WORDS)
+
+
 def online(timeout=4):
-    """True when the internet answers (any of three well-known hosts)."""
+    """True when the internet really works: a named host must resolve AND answer. (A raw IP like 1.1.1.1 is not
+    enough: after Wi-Fi comes back the router's DNS can lag for a minute, and every download would still fail.)"""
     import httpx
-    for url in ("https://api.dvidshub.net", "https://www.google.com/generate_204", "https://1.1.1.1"):
+    for url in ("https://api.dvidshub.net", "https://www.google.com/generate_204", "https://one.one.one.one"):
         try:
             httpx.head(url, timeout=timeout, follow_redirects=False)
             return True
@@ -126,27 +140,36 @@ def online(timeout=4):
 
 
 def wait_for_internet(log=None, stop=None, every=RETRY_EVERY, status=None, sleep=None, is_online=None):
-    """Blocks until the internet is back, checking every `every` seconds. Returns False if `stop` was set."""
+    """Blocks until the internet is back, checking every `every` seconds. Returns False if `stop` was set.
+    Many threads may wait at once: only the first one writes 'down' / 'still down' / 'back' to the log."""
     import time as _t
     sleep = sleep or _t.sleep
     is_online = is_online or online
     if is_online():
         return True
-    t0 = _t.time()
-    if log:
+    with _NET_LOCK:
+        first = _NET["down_since"] is None
+        if first:
+            _NET["down_since"] = _t.time()
+        t0 = _NET["down_since"]
+    if first and log:
         log(f"internet is down - checking again every {every}s, the work continues by itself when it is back")
     if status:
         status(net="waiting for internet")
-    last_note = t0
+    last_note = _t.time()
     while not is_online():
         if stop is not None and stop.is_set():
+            with _NET_LOCK:
+                _NET["down_since"] = None
             return False
         sleep(every)
-        if log and _t.time() - last_note >= 60:
+        if first and log and _t.time() - last_note >= 60:
             log(f"  still no internet ({int(_t.time() - t0)}s) - still checking every {every}s")
             last_note = _t.time()
-    if log:
-        log(f"internet is back after {int(_t.time() - t0)}s - continuing")
+    with _NET_LOCK:
+        was, _NET["down_since"] = _NET["down_since"], None
+    if was is not None and log:
+        log(f"internet is back after {int(_t.time() - was)}s - continuing")
     if status:
         status(net="")
     return True
@@ -155,11 +178,12 @@ def wait_for_internet(log=None, stop=None, every=RETRY_EVERY, status=None, sleep
 def with_net_retry(fn, log=None, stop=None, what="download", every=RETRY_EVERY, online_tries=4, status=None,
                    sleep=None, is_online=None):
     """Run fn(); on a network error: internet down -> wait (checking every 5 s) and retry, as long as it takes;
-    internet up but this request keeps failing -> retry every 5 s, give up after `online_tries`."""
+    internet up but this request keeps failing -> retry every 5 s, give up after `online_tries`.
+    DNS errors get DNS_GRACE extra tries first (DNS often comes back a minute after the connection)."""
     import time as _t
     sleep = sleep or _t.sleep
     is_online = is_online or online
-    fails = 0
+    fails = dns = 0
     while True:
         try:
             return fn()
@@ -171,7 +195,15 @@ def with_net_retry(fn, log=None, stop=None, what="download", every=RETRY_EVERY, 
             if not is_online():
                 if not wait_for_internet(log, stop, every, status, sleep, is_online):
                     raise
-                continue                       # an outage does not count as a failed try
+                fails = 0                      # an outage does not count as a failed try
+                continue
+            if is_dns_error(e) and dns < DNS_GRACE:
+                dns += 1
+                if log and dns == 1:
+                    log(f"  {what}: name lookup (DNS) not working yet - retrying every {every}s for up to "
+                        f"{DNS_GRACE * every}s")
+                sleep(every)
+                continue
             fails += 1
             if fails >= online_tries:
                 raise
