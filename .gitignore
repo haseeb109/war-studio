@@ -20,3 +20,5 @@ assets/sfx/*/*
 !assets/sfx/*/.gitkeep
 assets/music/*
 !assets/music/.gitkeep
+map_test.mp4
+map_test_work/
