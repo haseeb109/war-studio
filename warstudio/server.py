@@ -613,6 +613,11 @@ def update_apply():
     # uv rewrites uv.lock on the Mac (different uv version / platform); that local copy is never wanted,
     # and it blocked `git pull`. Throw it away, and park any other local edits in a stash instead of failing.
     _git("checkout", "--", "uv.lock")
+    try:                                  # insurance: a copy of the library index before any git change
+        from . import library
+        library.backup_index(load_settings(), name=f"index-preupdate-{time.strftime('%Y%m%d-%H%M%S')}.db")
+    except Exception:
+        pass
     stashed = ""
     _, dirty = _git("status", "--porcelain", "--untracked-files=no")
     if dirty.strip():
@@ -658,6 +663,11 @@ def serve(port=8765, open_browser=True):
     recover_interrupted()
 
     def _resume_library():
+        try:
+            from . import library
+            library.recover_index(load_settings(), library.status_log)   # index lost but shot files on disk
+        except Exception as e:
+            print(f"library index check failed: {e}", flush=True)
         try:
             from . import library
             library.resume_if_interrupted(load_settings())

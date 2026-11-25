@@ -82,6 +82,13 @@ Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, over
 
 **Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, and the sound design below (from a NexLev study of the channel's latest videos).
 
+## Library index safety (v0.9.4)
+`library/shots/index.db` was by mistake in git from v0.8.0 to v0.9.3, so the Update button stashed the real index
+away and put an empty one back (the shot files stayed on disk). Now the whole `library/shots/` folder is ignored by
+git, the index is backed up before every update (`library/shots/backups/index-preupdate-*.db`), and at every start
+WarStudio checks index vs. shot files: if most files are missing from the index it merges every saved copy (git
+stashes + backups) back in, keeping only shots whose file is on disk. Diagnostics shows it under Library / shot index.
+
 ## Footage mix (v0.9.3)
 At the end of every run the log shows where the footage came from, by share of screen time, e.g.
 `Footage mix (screen time): My Library 74% (96 shots, 2m 41s) · DVIDS 26% (35 shots, 0m 57s)`. The video page

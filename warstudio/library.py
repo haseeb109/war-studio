@@ -830,14 +830,15 @@ class Builder:
 
 
 # ---------------------------------------------------------------- backup
-def backup_index(settings=None, keep=7):
-    """One copy of index.db per day (sqlite backup API: consistent even while in use); the last `keep` days kept."""
+def backup_index(settings=None, keep=7, name=None):
+    """One copy of index.db per day (sqlite backup API: consistent even while in use); the last `keep` days kept.
+    `name` makes an extra copy (e.g. before an update) that the daily rotation leaves alone."""
     src = db_path(settings)
     if not src.exists():
         return None
     bdir = lib_dir(settings) / "backups"
     bdir.mkdir(exist_ok=True)
-    dst = bdir / f"index-{time.strftime('%Y%m%d')}.db"
+    dst = bdir / (name or f"index-{time.strftime('%Y%m%d')}.db")
     if dst.exists():
         return dst
     with _DB_LOCK:
@@ -845,9 +846,112 @@ def backup_index(settings=None, keep=7):
         a.backup(b)
         a.close()
         b.close()
-    for old in sorted(bdir.glob("index-*.db"))[:-keep]:
+    daily = [f for f in sorted(bdir.glob("index-2*.db"))]
+    for old in daily[:-keep]:
+        old.unlink()
+    for old in sorted(bdir.glob("index-preupdate-*.db"))[:-keep]:
         old.unlink()
     return dst
+
+
+def _shot_files(settings=None):
+    return [f for f in lib_dir(settings).glob("*.mp4") if not f.name.endswith(".part.mp4")]
+
+
+def _saved_index_copies(settings=None, root=None):
+    """Every older copy of index.db we can find: git stashes (v0.8.0-v0.9.3 had index.db in git, so the Update
+    button stashed the real one away) and the daily backups. Returns temp / backup file paths."""
+    root = Path(root or ROOT)
+    dbp = db_path(settings)
+    out = []
+    try:
+        rel = dbp.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        rel = None
+    if rel and shutil.which("git") and (root / ".git").exists():
+        r = subprocess.run(["git", "-C", str(root), "stash", "list", "--format=%gd"], capture_output=True, text=True)
+        tmpd = Path(tempfile.mkdtemp(prefix="ws-index-"))
+        for i, ref in enumerate(x for x in r.stdout.split() if x.strip()):
+            b = subprocess.run(["git", "-C", str(root), "show", f"{ref}:{rel}"], capture_output=True)
+            if b.returncode == 0 and b.stdout[:16] == b"SQLite format 3\x00":
+                f = tmpd / f"stash{i}.db"
+                f.write_bytes(b.stdout)
+                out.append((f"git {ref}", f))
+    bdir = lib_dir(settings) / "backups"
+    for f in sorted(bdir.glob("index-*.db")) if bdir.exists() else []:
+        out.append((f"backup {f.name}", f))
+    return out
+
+
+def index_health(settings=None):
+    """(rows whose shot file is on disk, shot files on disk)."""
+    files = _shot_files(settings)
+    with _DB_LOCK:
+        con = _db(settings)
+        rows = [r[0] for r in con.execute("SELECT file FROM shots")]
+        con.close()
+    return sum(1 for f in rows if Path(f).exists()), len(files)
+
+
+def recover_index(settings=None, log=None, root=None, force=False):
+    """The index lost its rows while the shot files are still on disk: merge every saved copy (git stashes, daily
+    backups) back in, keeping only rows whose shot file still exists. Safe to run any time; returns shots added."""
+    log = log or (lambda m: None)
+    have, files = index_health(settings)
+    if not files or (not force and have >= 0.9 * files):
+        return 0
+    copies = _saved_index_copies(settings, root)
+    if not copies:
+        log(f"library index: {have} of {files} shot files are indexed and no saved copy was found")
+        return 0
+    dbp = db_path(settings)
+    keep = lib_dir(settings) / "backups"
+    keep.mkdir(exist_ok=True)
+    shutil.copy2(dbp, keep / f"index-before-recover-{time.strftime('%Y%m%d-%H%M%S')}.db")
+    added, used = 0, []
+    with _DB_LOCK:
+        con = _db(settings)
+        cols = {t: [r[1] for r in con.execute(f"PRAGMA table_info({t})")] for t in ("shots", "videos", "deleted")}
+        for name, f in copies:
+            try:
+                con.execute("ATTACH DATABASE ? AS c", (str(f),))
+            except sqlite3.Error:
+                continue
+            try:
+                ccols = {t: [r[1] for r in con.execute(f"PRAGMA c.table_info({t})")] for t in cols}
+                common = [c for c in cols["shots"] if c in ccols["shots"] and c != "id"]
+                n0 = con.execute("SELECT COUNT(*) FROM shots").fetchone()[0]
+                if "file" in common:
+                    q = ",".join(common)
+                    for row in con.execute(f"SELECT {q} FROM c.shots").fetchall():
+                        r = dict(zip(common, row))
+                        if Path(str(r.get("file") or "")).exists() and Path(str(r.get("keyframe") or "")).exists():
+                            con.execute(f"INSERT OR IGNORE INTO shots({q}) VALUES({','.join('?' * len(common))})", row)
+                vc = [c for c in cols["videos"] if c in ccols["videos"]]
+                if vc:
+                    con.execute(f"INSERT OR IGNORE INTO videos({','.join(vc)}) SELECT {','.join(vc)} FROM c.videos")
+                dc = [c for c in cols["deleted"] if c in ccols["deleted"]]
+                if dc and {"source", "src_id", "src_start"} <= set(dc):
+                    con.execute(f"""INSERT INTO deleted({','.join(dc)}) SELECT {','.join('d.' + c for c in dc)}
+                        FROM c.deleted d WHERE NOT EXISTS (SELECT 1 FROM deleted x WHERE x.source = d.source
+                        AND x.src_id = d.src_id AND x.src_start = d.src_start)""")
+                con.commit()
+                got = con.execute("SELECT COUNT(*) FROM shots").fetchone()[0] - n0
+                if got:
+                    used.append(f"{name} (+{got})")
+                    added += got
+            finally:
+                con.execute("DETACH DATABASE c")
+        # rows of shots that are not on this disk (e.g. a copy made on another machine) are useless
+        gone = [r[0] for r in con.execute("SELECT id, file FROM shots").fetchall() if not Path(r[1]).exists()]
+        if gone and added:
+            con.executemany("DELETE FROM shots WHERE id = ?", [(i,) for i in gone])
+            con.commit()
+        con.close()
+    now, files = index_health(settings)
+    log(f"library index recovered: {now} of {files} shot files indexed (was {have})"
+        + (f" - from {', '.join(used)}" if used else ""))
+    return added
 
 
 # ---------------------------------------------------------------- browser (Library tab)
@@ -912,6 +1016,15 @@ def delete_shot(settings, shot_id):
 
 # ---------------------------------------------------------------- background job (one at a time)
 _JOB = {"thread": None, "stop": threading.Event(), "gate": None}
+
+
+def status_log(msg):
+    """Write one line into the Library tab's log (used outside a build, e.g. at app start)."""
+    line = f"{time.strftime('%H:%M:%S')}  {msg}"
+    print(line, flush=True)
+    st = read_json(STATUS_FILE, {}) or {}
+    st["log"] = (st.get("log") or [])[-299:] + [line]
+    write_json(STATUS_FILE, st)
 
 
 def job_status():

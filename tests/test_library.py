@@ -378,3 +378,47 @@ def test_footage_mix_by_screen_time():
     assert m["seconds"] == {"library": 8.5, "dvids": 1.5} and m["percent"] == {"library": 85.0, "dvids": 15.0}
     line = qc.mix_line(m)
     assert "My Library 85% (2 shots, 0m 08s)" in line and "DVIDS 15%" in line
+
+
+def _git(cwd, *a):
+    r = subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "-C", str(cwd), *a],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_index_recovered_after_update_stashed_it(tmp_path, monkeypatch):
+    """v0.8.0-v0.9.3 had library/shots/index.db in git: the Update button stashed the real index and put the
+    empty committed one back. The app finds the stashed copy at start and merges it back."""
+    import sqlite3
+    repo = tmp_path / "war-studio"
+    shots = repo / "library" / "shots"
+    shots.mkdir(parents=True)
+    s = {"library_dir": str(shots)}
+    _git(tmp_path, "init", "-q", str(repo))
+    library._db(s).close()                                     # the empty index that was committed by mistake
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "v0.8.0")
+    from PIL import Image
+    with sqlite3.connect(shots / "index.db") as con:           # the overnight build fills it
+        for i in range(30):
+            f, kf = shots / f"dvids_{i}.mp4", shots / f"dvids_{i}.jpg"
+            f.write_bytes(b"x")
+            Image.new("RGB", (16, 9)).save(kf)
+            con.execute("INSERT INTO shots(source, src_id, src_start, file, keyframe, caption, emb, category) "
+                        "VALUES('dvids', ?, 0, ?, ?, 'jet', ?, 'F-15E')",
+                        (f"v{i}", str(f), str(kf), np.ones(512, np.float32).tobytes()))
+        con.execute("INSERT INTO videos(source, src_id, status) VALUES('dvids', 'video:1', 'done')")
+    _git(repo, "stash", "push", "-q", "-m", "warstudio auto-update")          # what the Update button did
+    assert library.index_health(s) == (0, 30)
+    # the next version untracks the file; pulling it deletes the working copy
+    _git(repo, "rm", "-q", "--cached", "library/shots/index.db")
+    _git(repo, "commit", "-q", "-m", "v0.9.4")
+    (shots / "index.db").unlink()
+    logs = []
+    assert library.recover_index(s, logs.append, root=repo) == 30
+    assert library.index_health(s) == (30, 30) and library.stats(s)["videos"] == {"done": 1}
+    assert len(library.LibraryIndex(s)) == 30
+    assert any("recovered: 30 of 30" in m and "git stash@{0}" in m for m in logs)
+    assert library.recover_index(s, logs.append, root=repo) == 0               # healthy now: nothing to do
+    assert list((shots / "backups").glob("index-before-recover-*.db"))

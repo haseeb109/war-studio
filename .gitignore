@@ -10,8 +10,13 @@ projects/*
 !projects/.gitkeep
 library/raw/*
 !library/raw/.gitkeep
+# the shot library (index.db, shots, keyframes, backups) is per-machine data - never in git
+library/shots/*
+!library/shots/.gitkeep
 data/*
 !data/.gitkeep
 assets/sfx/_generated/
+assets/sfx/*/*
+!assets/sfx/*/.gitkeep
 assets/music/*
 !assets/music/.gitkeep

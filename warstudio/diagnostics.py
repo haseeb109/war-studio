@@ -215,6 +215,17 @@ def chk_mix(c):
     return f
 
 
+def chk_library_index():
+    from . import library
+    have, files = library.index_health(load_settings())
+    if not files:
+        return "ok", "library is empty (build it on the Library page)"
+    if have < 0.9 * files:
+        return "warn", (f"only {have} of {files} shot files are in the index - restart WarStudio: it merges the "
+                        f"saved copies (git stash / backups) back in by itself")
+    return "ok", f"{have} shots indexed, {files} shot files on disk"
+
+
 def chk_music():
     from .sfx import music_tracks
     s = load_settings().get("music_file") or ""
@@ -430,6 +441,7 @@ def run_all(full=False, on_update=None):
     c.run("Render", "segment render (grade + overlay + frame count)", chk_segment(c))
     c.run("Audio", "sound effects", chk_sfx)
     c.run("Audio", "mix + loudness", chk_mix(c))
+    c.run("Library", "shot index", chk_library_index)
     c.run("Audio", "background music", chk_music)
     c.run("APIs", "keys", chk_keys)
     c.run("APIs", "ai33 key + voice library", chk_ai33_key)
