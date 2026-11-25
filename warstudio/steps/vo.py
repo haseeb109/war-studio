@@ -82,4 +82,10 @@ def run_step(proj, keys, settings, voice_id, log, dummy=False):
     data = {"sentences": timeline, "total": round(t, 3), "chars": chars, "credits": credits}
     write_json(out_json, data)
     log(f"VO done: {t:.1f}s, ai33 credits {credits}")
+    if credits and not dummy:
+        try:                                   # the cost record never breaks the step
+            from .. import costs
+            costs.add(proj, "voice", credits=credits, characters=chars)
+        except Exception as e:
+            log(f"cost: voice not recorded ({str(e)[:80]})")
     return data

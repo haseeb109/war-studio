@@ -160,4 +160,11 @@ def run_step(proj, keys, settings, log, dummy=False):
     cost = (usage_tot["prompt_tokens"] / 1e6 * num(settings.get("brain_price_in_per_m"), 0.3) +
             usage_tot["completion_tokens"] / 1e6 * num(settings.get("brain_price_out_per_m"), 1.2))
     log(f"specs done ({sum(1 for s in result if s.get('fallback'))} fallback), brain ~${cost:.3f}")
+    if not dummy:
+        try:                                   # the cost record never breaks the step
+            from .. import costs
+            costs.add(proj, "brain", usd=cost, tokens_in=usage_tot["prompt_tokens"],
+                      tokens_out=usage_tot["completion_tokens"])
+        except Exception as e:
+            log(f"cost: brain not recorded ({str(e)[:80]})")
     return result

@@ -459,6 +459,17 @@ function mixBar(m) {
     `</div>`;
 }
 
+// what a video cost (costs.json): voice credits turn into $ with the price set in Settings
+function costText(c) {
+  return "$" + (+c.total_usd || 0).toFixed(3) + (c.voice_priced ? "" : " + voice credits");
+}
+function costParts(c) {
+  const N = {voice: "voice", brain: "script planner", rerank: "clip ranking", segment_check: "clip check", captions: "captions"};
+  return Object.entries(c.parts || {}).map(([k, v]) => k === "voice"
+    ? (c.voice_priced ? `voice $${(+v.usd).toFixed(3)} (${Math.round(v.credits || 0)} credits)` : `voice ${Math.round(v.credits || 0)} ai33 credits - set ai33_usd_per_1k_credits in Settings`)
+    : `${N[k] || k} $${(+v.usd || 0).toFixed(3)}`).join(" · ");
+}
+
 let LB_TIMER = null;
 async function loadLibrary() {
   let d;
@@ -609,6 +620,7 @@ function renderLib() {
     if (j.no_footage) tags.push(`<span class="tag bad">${j.no_footage} no footage</span>`);
     if (j.dummy) tags.push('<span class="tag">dry run</span>');
     if (j.state === "done" && j.total_seconds) tags.push(`<span class="tag">⏱ ${fmtClock(j.total_seconds)}</span>`);
+    if (j.cost && Object.keys(j.cost.parts || {}).length) tags.push(`<span class="tag">${costText(j.cost)}</span>`);
     if (running && j.run_started) tags.push(`<span class="tag warn">⏱ ${fmtClock(Date.now() / 1000 - j.run_started)}</span>`);
     const date = j.created ? new Date(j.created * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"}) : "";
     return `<div class="vc" data-id="${j.id}"><div class="pv">${pv}${j.seconds ? `<span class="dur">${fmtDur(j.seconds)}</span>` : ""}</div>
@@ -647,6 +659,7 @@ async function refreshJob() {
   }).join("");
   if (busy && (st.run_started || st.apply_started)) $("#jdTime").innerHTML = `<span class="flagtxt">⏱ Running for ${fmtClock(now - Math.max(st.run_started || 0, st.apply_started || 0))}</span>`;
   else if (st.state === "done" && st.total_seconds) $("#jdTime").innerHTML = `<b>⏱ Made in ${fmtClock(st.total_seconds)}</b>` +
+    (d.cost && Object.keys(d.cost.parts || {}).length ? ` · <b>Cost ${costText(d.cost)}</b> <span class="muted">(${costParts(d.cost)})</span>` : "") +
     (st.last_run_seconds && Math.abs(st.last_run_seconds - st.total_seconds) > 5 ? ` <span class="muted">(last run ${fmtClock(st.last_run_seconds)})</span>` : "") +
     (st.last_apply_seconds ? ` <span class="muted">· last edit applied in ${fmtClock(st.last_apply_seconds)}</span>` : "");
   else $("#jdTime").innerHTML = "";

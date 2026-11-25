@@ -341,6 +341,8 @@ def new_job(j: NewJob):
 
 @app.get("/api/jobs")
 def jobs():
+    from . import costs
+    settings = load_settings()
     out = []
     for p in sorted(PROJECTS_DIR.glob("*/project.json"), reverse=True)[:200]:
         meta = read_json(p) or {}
@@ -352,7 +354,7 @@ def jobs():
                     "created": meta.get("created"), "seconds": qc.get("video_seconds"), "style": meta.get("style"),
                     "no_footage": len(qc.get("beats_without_footage", [])), "review": rv.get("state", "unreviewed"),
                     "total_seconds": st.get("total_seconds"), "run_started": st.get("run_started"),
-                    "dummy": meta.get("dummy", False)})
+                    "dummy": meta.get("dummy", False), "cost": costs.summary(p.parent, settings)})
     return out
 
 
@@ -531,7 +533,9 @@ def job(jid: str):
     st = read_json(proj / "status.json", {}) or {}
     qc = read_json(proj / "qc.json")
     files = [f for f in ("final.mp4", "contact_sheet.jpg", "footage_log.csv") if (proj / f).exists()]
-    return {"id": jid, "meta": read_json(proj / "project.json"), "status": st, "qc": qc, "files": files}
+    from . import costs
+    return {"id": jid, "meta": read_json(proj / "project.json"), "status": st, "qc": qc, "files": files,
+            "cost": costs.summary(proj, load_settings())}
 
 
 @app.post("/api/jobs/{jid}/resume")

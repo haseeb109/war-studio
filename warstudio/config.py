@@ -48,6 +48,7 @@ DEFAULT_SETTINGS = {
     "segment_check": "auto",     # auto = pixels + Apple Vision text/face check on Mac | vlm = also the vision model | off
     "tts_model": "eleven_multilingual_v2",
     "tts_concurrency": 4,
+    "ai33_usd_per_1k_credits": 0,    # your ai33 plan price per 1000 credits (0 = unknown: costs show voice credits)
     "clip_model": "ViT-B-32",
     "clip_pretrained": "laion2b_s34b_b79k",
     "candidates_per_query": 12,

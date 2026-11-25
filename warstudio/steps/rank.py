@@ -371,6 +371,11 @@ def run_step(proj, keys, settings, style, log):
     log("reranked by: " + ", ".join(f"{a} {b}" for a, b in by_.most_common()))
     if rr.chain or rr.stats["ok"]:
         log(rr.summary())
+        try:                                   # the cost record never breaks the step
+            from .. import costs
+            costs.add(proj, "rerank", usd=getattr(rr, "cost", lambda: 0.0)(), calls=rr.stats.get("ok", 0))
+        except Exception as e:
+            log(f"cost: rerank not recorded ({str(e)[:80]})")
     tiers = Counter(("reuse" if (v or {}).get("scene_reuse") else (v or {}).get("tier", "?")) for v in picks.values() if v)
     log("match level: " + ", ".join(f"{a} {b}" for a, b in tiers.most_common()))
     log(f"rank done; {sum(1 for v in picks.values() if not v)} beats without a pick; picks per source: " +

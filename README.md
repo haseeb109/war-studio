@@ -82,6 +82,14 @@ Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, over
 
 **Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, and the sound design below (from a NexLev study of the channel's latest videos).
 
+## Cost of every video (v0.9.9)
+Each paid step adds what it spent to `<project>/costs.json` while it runs: voice (ai33 credits), script planner
+(DeepSeek tokens), clip ranking (Gemini tokens), clip check (only in `segment_check: vlm`). When the video is done the
+log shows e.g. `Cost of this video: $0.081 - voice $0.050 (2155 ai33 credits), script planner $0.025, clip ranking
+$0.006`; the video page shows it next to "Made in", and every card in Videos has a cost tag. Set your ai33 plan
+price in Settings -> `ai33_usd_per_1k_credits` (e.g. a $10 plan with 100,000 credits = 0.1); while it is 0 the voice
+part is shown in credits. A step that is re-run adds again (that money was spent); a skipped step adds nothing.
+
 ## No repeats, sound on every new shot (v0.9.8)
 - A DVIDS video is never downloaded twice: it is skipped when it is in the processed list (done / failed / skipped)
   **or** when the library already holds a shot from it (covers a list that lost rows in an index recovery). On top,

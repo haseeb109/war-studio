@@ -237,3 +237,20 @@ def test_overlays_parallel_dedupe_and_fallback(tmp_path, monkeypatch):
     plan2 = {"4": {"kind": "label", "line1": "TOR-M2", "line2": "", "duration": 2.0}}
     out2 = overlays.render_all(plan2, STYLE, tmp_path / "ov2", lambda *a, **k: None)
     assert out2["4"]["type"] == "png" and Path(out2["4"]["path"]).exists()
+
+
+def test_video_cost_adds_up_and_prices_voice_credits(tmp_path):
+    from warstudio import costs
+    costs.add(tmp_path, "voice", credits=2155, characters=1938)
+    costs.add(tmp_path, "brain", usd=0.052, tokens_in=1000, tokens_out=500)
+    costs.add(tmp_path, "rerank", usd=0.0, calls=0)
+    costs.add(tmp_path, "brain", usd=0.010)                       # re-run from specs: that money was spent too
+    s = costs.summary(tmp_path, {"ai33_usd_per_1k_credits": 0})
+    assert s["total_usd"] == 0.062 and not s["voice_priced"]
+    assert s["parts"]["brain"]["runs"] == 2 and s["parts"]["voice"]["credits"] == 2155
+    line = costs.line(s)
+    assert "$0.062 + voice credits" in line and "2155 ai33 credits" in line and "script planner $0.062" in line
+    s = costs.summary(tmp_path, {"ai33_usd_per_1k_credits": 0.3})   # price set in Settings
+    assert s["voice_priced"] and abs(s["total_usd"] - (0.062 + 2.155 * 0.3)) < 1e-6
+    assert "voice $0.646 (2155 ai33 credits)" in costs.line(s)
+    assert costs.summary(tmp_path / "none", {})["total_usd"] == 0

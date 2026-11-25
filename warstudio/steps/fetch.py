@@ -236,4 +236,10 @@ def run_step(proj, keys, style, log, settings=None):
     missing = [b for b, v in fetched.items() if not v]
     if missing:
         log(f"fetch done; {len(missing)} beat(s) without footage (they repeat the previous clip): {', '.join(missing[:12])}")
+    if rr is not None and getattr(rr, "stats", {}).get("ok"):
+        try:                                   # the cost record never breaks the step
+            from .. import costs
+            costs.add(proj, "segment_check", usd=getattr(rr, "cost", lambda: 0.0)(), calls=rr.stats["ok"])
+        except Exception as e:
+            log(f"cost: clip check not recorded ({str(e)[:80]})")
     return fetched

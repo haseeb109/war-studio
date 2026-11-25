@@ -208,6 +208,14 @@ class Reranker:
                 self.stats["clip"] += 1
                 return None, None
 
+    def cost(self):
+        """$ spent on Gemini calls in this run (Groq calls are on its free tier)."""
+        st = self.stats
+        pin = float(self.settings.get("gemini_price_in_per_m", DEFAULT_PRICES["gemini"][0]))
+        pout = float(self.settings.get("gemini_price_out_per_m", DEFAULT_PRICES["gemini"][1]))
+        g_share = st["by"].get("gemini", 0) / max(st["ok"], 1)
+        return g_share * (st["in"] * pin + (st["out"] + st["thinking"]) * pout) / 1e6
+
     def summary(self):
         st = self.stats
         pin = float(self.settings.get("gemini_price_in_per_m", DEFAULT_PRICES["gemini"][0]))

@@ -125,6 +125,13 @@ def run_project(proj, from_step=None):
                     + (f", {lb.dupes} already in the library (duplicates skipped)" if lb.dupes else ""))
             except Exception as e:
                 log(f"library: learning skipped ({str(e)[:120]})")
+        try:                                   # what this video cost
+            from . import costs
+            cs = costs.summary(proj, settings)
+            log.set(cost=cs)
+            log(costs.line(cs))
+        except Exception as e:
+            log(f"cost: could not add up ({str(e)[:100]})")
         try:                                   # the footage mix is the last thing in the log
             q = read_json(proj / "qc.json", {}) or {}
             if q.get("source_mix"):
