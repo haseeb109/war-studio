@@ -35,6 +35,8 @@ def main():
     for f in ("maplibre-gl.js", "maplibre-gl.css", "countries.geojson"):
         shutil.copy(MAPS / f, work / f)
     shutil.copy(HF / "gsap.min.js", work / "gsap.min.js")
+    style = json.loads((ROOT / "styles" / "beyond_military" / "style.json").read_text())
+    PLAN["theme"] = style["maps"]["theme"]               # the locked map style
     page = (MAPS / "map_template.html").read_text().replace("__DUR__", f"{PLAN['duration']:.3f}") \
         .replace("__PLAN__", json.dumps(PLAN))
     (work / "index.html").write_text(page)

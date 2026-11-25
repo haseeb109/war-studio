@@ -89,5 +89,12 @@
     "skip_title_words": ["package", "interview", "briefing", "press", "remarks", "speech", "conference", "podcast", "news", "town hall", "ceremony", "testimony", "q&a"]
   },
 
+  "maps": {
+    "_note": "LOCKED map style: Tactical dark (dark navy land, yellow accent, red arrows, yellow range rings, white country names). Map clips are drawn with MapLibre GL JS + HyperFrames from maps/map_template.html. Do not change without the user.",
+    "locked": true,
+    "theme": {"sea": "#081321", "land": "#1b2430", "border": "#4b5a6b", "hl": "#ffffff", "arrow": "#ff3b30", "ring": "#FFC400",
+              "label": "#ffffff", "accent": "#FFC400", "font": "\"Helvetica Neue\",Arial,sans-serif", "grid": "", "scan": false, "sweep": false},
+    "highlight_colors": {"enemy": "#b3261e", "ally": "#3a5a80", "neutral": "#4b5a6b"}
+  },
   "audio": {"target_lufs": -14, "vo_gain_db": 0}
 }
