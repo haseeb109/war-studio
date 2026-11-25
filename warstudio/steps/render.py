@@ -20,6 +20,8 @@ def segment_cmd(src, frames, fps, style, fclass, ov, out, enc, crop_bottom=0.0):
     dur = frames / fps
     grade = style["grade"].get(fclass, style["grade"]["real"])
     s = style["footage"]["motion"]["drift_scale"] if style["footage"]["motion"].get("drift") else 1.0
+    if fclass == "map_clip":                      # a rendered map already moves and has its locked colours
+        grade, s = "null", 1.0
     y = "(ih-oh)/2"
     if crop_bottom and src:
         # a lower-third sits in the bottom `crop_bottom` of the clip: zoom in, anchored to the top, so it leaves the frame
@@ -101,7 +103,8 @@ def run_step(proj, settings, style, log, use_hf=True):
         if out.exists():
             continue
         crop = (f or {}).get("crop_bottom", 0.0) if f and Path(f["file"]).exists() else 0.0
-        jobs.append((bid, out, segment_cmd(src, frames, fps, style, spec.get(b["id"], {}).get("footage_class", "real"),
+        jobs.append((bid, out, segment_cmd(src, frames, fps, style, ("map_clip" if (f or {}).get("source") == "map" and src == (f or {}).get("file")
+                                            else spec.get(b["id"], {}).get("footage_class", "real")),
                                            rendered.get(bid), out, enc, crop)))
 
     # several segments at once: the Mac's media engine and CPU cores have room for 4

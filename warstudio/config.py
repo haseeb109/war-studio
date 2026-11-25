@@ -55,6 +55,8 @@ DEFAULT_SETTINGS = {
     "rerank_top_k": 5,
     "rerank_concurrency": 8,
     "render_concurrency": 4,
+    "maps_enabled": True,
+    "maps_parallel": 3,
     "use_library": True,         # match beats against the local shot library before searching online
     "library_dir": "",           # empty = <WarStudio>/library/shots
     "library_max_gb": 200,

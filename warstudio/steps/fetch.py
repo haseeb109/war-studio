@@ -115,6 +115,13 @@ def run_step(proj, keys, style, log, settings=None):
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     used = {}
     lock = threading.Lock()
+    try:                                          # map beats: animated maps first (any failure -> stock footage)
+        from .. import maps
+        if maps.run_step(proj, beats, read_json(proj / "specs.json", []) or [], vo_total, settings, keys, style,
+                         log, fetched):
+            write_json(out_path, fetched)
+    except Exception as e:
+        log(f"maps: skipped ({str(e)[:160]})")
     jobs = []
     for i, b in enumerate(beats):
         bid = str(b["id"])

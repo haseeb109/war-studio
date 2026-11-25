@@ -52,7 +52,7 @@ def write_credits(proj, beats, fetched):
 
 
 SOURCE_NAMES = {"library": "My Library", "dvids": "DVIDS", "commons": "Commons", "pexels": "Pexels",
-                "pixabay": "Pixabay", "user": "Your uploads", "none": "No footage"}
+                "pixabay": "Pixabay", "user": "Your uploads", "map": "Map animation", "none": "No footage"}
 
 
 def source_mix(beats, fetched, total=None):

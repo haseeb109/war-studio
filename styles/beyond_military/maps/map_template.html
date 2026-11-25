@@ -87,8 +87,9 @@ function draw() {
   document.getElementById("labels").innerHTML = lab;
 }
 const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res));
-Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady]).then(([geo]) => {
+Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.fonts ? document.fonts.ready : 0]).then(([geo]) => {
   {
+    if (!Object.keys(HL).length) HL["___"] = TH.land;      // a match expression needs at least one pair
     map.addSource("c", {type: "geojson", data: geo});
     map.addLayer({id: "land", type: "fill", source: "c", paint: {"fill-color": ["match", ["get", "iso"], ...Object.entries(HL).flat(), TH.land],
                                                                   "fill-opacity": ["match", ["get", "iso"], ...Object.keys(HL).flatMap(k => [k, 0.75]), 1]}});
