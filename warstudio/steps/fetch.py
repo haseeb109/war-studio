@@ -17,10 +17,15 @@ PAD = 1.0
 
 def resolve_dvids(pick, key):
     """DVIDS search results carry no file URL; the asset endpoint does."""
-    r = httpx.get("https://api.dvidshub.net/asset", params={"api_key": key, "id": pick["id"]},
-                  headers={"User-Agent": UA}, timeout=30)
-    r.raise_for_status()
-    d = r.json().get("results") or r.json()
+    from ..util import with_net_retry
+
+    def get():
+        resp = httpx.get("https://api.dvidshub.net/asset", params={"api_key": key, "id": pick["id"]},
+                         headers={"User-Agent": UA}, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    j = with_net_retry(get, what=f"DVIDS asset {pick['id']}", online_tries=3)
+    d = j.get("results") or j
     files = d.get("files") or []
     if isinstance(files, dict):
         files = list(files.values())
@@ -59,13 +64,15 @@ def fetch_one(pick, start, need, out, W, H, fps):
     """Download `need` seconds from `start`, normalized. Written to a temp file and only renamed into place
     after it proves playable, so a broken download can never be reused later."""
     vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={fps},format=yuv420p"
-    ua = ["-user_agent", UA] if str(pick["video_url"]).startswith("http") else []
+    from ..util import ffmpeg_net_args, with_net_retry
+    net = ffmpeg_net_args(pick["video_url"])       # reconnect after drops; stalled reads give up after 30 s
     out = Path(out)
     tmp = out.with_name(out.stem + ".part.mp4")
     try:
-        run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start}", *ua, "-i", pick["video_url"],
-             "-t", f"{need:.2f}", "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(tmp)],
-            timeout=600)
+        with_net_retry(lambda: run(["ffmpeg", "-y", "-loglevel", "error", *net, "-ss", f"{start}", "-i",
+                                    pick["video_url"], "-t", f"{need:.2f}", "-an", "-vf", vf, "-c:v", "libx264",
+                                    "-preset", "veryfast", "-crf", "18", str(tmp)], timeout=600),
+                       what=f"clip {pick.get('source')}:{pick.get('id')}", online_tries=3)
         got = duration(tmp)
         if got < min(0.5, need * 0.5):
             raise RuntimeError(f"clip too short ({got:.2f}s)")

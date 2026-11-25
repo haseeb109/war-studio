@@ -80,3 +80,158 @@ def encoder_args(enc, quality="high"):
     if enc == "h264_videotoolbox":
         return ["-c:v", "h264_videotoolbox", "-b:v", "12M" if quality == "high" else "8M", "-allow_sw", "1"]
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19" if quality == "high" else "22"]
+
+
+# ---------------------------------------------------------------- network resilience
+NET_ERR_WORDS = ("connection reset", "connection refused", "connection aborted", "timed out", "timeout",
+                 "network is unreachable", "network is down", "no route to host", "temporary failure in name resolution",
+                 "could not resolve", "name or service not known", "nodename nor servname", "failed to resolve",
+                 "i/o error", "broken pipe", "end of file", "server returned 5", "502", "503", "504",
+                 "remote end closed", "ssl", "eof occurred", "connection closed", "not connected to the internet",
+                 "the internet connection appears to be offline", "errno 8", "errno 50", "errno 51", "errno 60",
+                 "errno 61", "errno 64", "errno 65")
+RETRY_EVERY = 5          # seconds between retries when the internet drops
+
+
+def is_network_error(e):
+    try:
+        import httpx
+        if isinstance(e, (httpx.UnsupportedProtocol, httpx.InvalidURL)):
+            return False                      # a bad link, not the internet: never wait on it
+        if isinstance(e, httpx.TransportError):
+            return True
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (429, 500, 502, 503, 504):
+            return True
+    except Exception:
+        pass
+    if isinstance(e, (ConnectionError, TimeoutError)):
+        return True
+    import urllib.error
+    if isinstance(e, urllib.error.URLError) and not isinstance(e, urllib.error.HTTPError):
+        return True
+    msg = str(e).lower()
+    return any(w in msg for w in NET_ERR_WORDS)
+
+
+def online(timeout=4):
+    """True when the internet answers (any of three well-known hosts)."""
+    import httpx
+    for url in ("https://api.dvidshub.net", "https://www.google.com/generate_204", "https://1.1.1.1"):
+        try:
+            httpx.head(url, timeout=timeout, follow_redirects=False)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def wait_for_internet(log=None, stop=None, every=RETRY_EVERY, status=None, sleep=None, is_online=None):
+    """Blocks until the internet is back, checking every `every` seconds. Returns False if `stop` was set."""
+    import time as _t
+    sleep = sleep or _t.sleep
+    is_online = is_online or online
+    if is_online():
+        return True
+    t0 = _t.time()
+    if log:
+        log(f"internet is down - checking again every {every}s, the work continues by itself when it is back")
+    if status:
+        status(net="waiting for internet")
+    last_note = t0
+    while not is_online():
+        if stop is not None and stop.is_set():
+            return False
+        sleep(every)
+        if log and _t.time() - last_note >= 60:
+            log(f"  still no internet ({int(_t.time() - t0)}s) - still checking every {every}s")
+            last_note = _t.time()
+    if log:
+        log(f"internet is back after {int(_t.time() - t0)}s - continuing")
+    if status:
+        status(net="")
+    return True
+
+
+def with_net_retry(fn, log=None, stop=None, what="download", every=RETRY_EVERY, online_tries=4, status=None,
+                   sleep=None, is_online=None):
+    """Run fn(); on a network error: internet down -> wait (checking every 5 s) and retry, as long as it takes;
+    internet up but this request keeps failing -> retry every 5 s, give up after `online_tries`."""
+    import time as _t
+    sleep = sleep or _t.sleep
+    is_online = is_online or online
+    fails = 0
+    while True:
+        try:
+            return fn()
+        except Exception as e:
+            if not is_network_error(e):
+                raise
+            if stop is not None and stop.is_set():
+                raise
+            if not is_online():
+                if not wait_for_internet(log, stop, every, status, sleep, is_online):
+                    raise
+                continue                       # an outage does not count as a failed try
+            fails += 1
+            if fails >= online_tries:
+                raise
+            if log:
+                log(f"  {what}: network error ({str(e)[:90]}) - retry {fails}/{online_tries - 1} in {every}s")
+            sleep(every)
+
+
+_FF_NET = None
+
+
+def ffmpeg_net_args(url):
+    """Input options that make ffmpeg reconnect by itself after a dropped connection (http inputs only), and
+    give up on a stalled read after 30 s instead of hanging forever."""
+    global _FF_NET
+    if not str(url).startswith("http"):
+        return []
+    if _FF_NET is None:
+        try:
+            h = subprocess.run(["ffmpeg", "-hide_banner", "-h", "protocol=http"], capture_output=True, text=True,
+                               timeout=20).stdout
+        except Exception:
+            h = ""
+        args = []
+        for opt, val in (("reconnect", "1"), ("reconnect_streamed", "1"), ("reconnect_on_network_error", "1"),
+                         ("reconnect_delay_max", "5")):
+            if f"-{opt} " in h:
+                args += [f"-{opt}", val]
+        _FF_NET = args + ["-rw_timeout", "30000000"]
+    return ["-user_agent", UA] + list(_FF_NET)
+
+
+def download_resume(url, dest, log=None, stop=None, timeout=60, status=None, chunk=1 << 20, online_tries=6):
+    """Download that survives a dropped connection: keeps what it has in dest.part and continues with an HTTP
+    Range request (if the server ignores it, starts that file again). Retries every 5 s; waits out outages."""
+    import httpx
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not str(url).startswith(("http://", "https://")):
+        shutil.copyfile(url, dest)            # a local file (own footage, tests)
+        return dest
+    part = dest.with_name(dest.name + ".part")
+
+    def attempt():
+        have = part.stat().st_size if part.exists() else 0
+        headers = {"User-Agent": UA}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        with httpx.stream("GET", url, headers=headers, timeout=timeout, follow_redirects=True) as r:
+            if r.status_code == 416:            # already complete
+                part.replace(dest)
+                return dest
+            r.raise_for_status()
+            mode = "ab" if have and r.status_code == 206 else "wb"
+            with open(part, mode) as f:
+                for b in r.iter_bytes(chunk):
+                    if stop is not None and stop.is_set():
+                        raise RuntimeError("stopped")
+                    f.write(b)
+        part.replace(dest)
+        return dest
+
+    return with_net_retry(attempt, log, stop, what=f"download {dest.name}", online_tries=online_tries, status=status)

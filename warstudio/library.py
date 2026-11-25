@@ -24,7 +24,8 @@ import httpx
 import numpy as np
 
 from .config import DATA_DIR, ROOT
-from .util import UA, download, duration, encoder_args, num, read_json, video_encoder, write_json
+from .util import (UA, download, download_resume, duration, encoder_args, ffmpeg_net_args, is_network_error, num,
+                   read_json, run, video_encoder, wait_for_internet, with_net_retry, write_json)
 
 STATUS_FILE = DATA_DIR / "library_status.json"
 _DB_LOCK = threading.RLock()
@@ -434,13 +435,17 @@ class Builder:
     def _dvids_search(self, query, n=50, page=1):
         from .steps.search import search_dvids
         k = self.keys["DVIDS_API_KEY"]
-        return search_dvids(query + " B-Roll", k, n, page) + search_dvids(query, k, n, page)
+        return with_net_retry(lambda: search_dvids(query + " B-Roll", k, n, page) + search_dvids(query, k, n, page),
+                              self.log, self.stop, what=f"DVIDS search '{query}'", status=self.status)
 
     def _dvids_asset(self, src_id):
-        r = httpx.get("https://api.dvidshub.net/asset", params={"api_key": self.keys["DVIDS_API_KEY"], "id": src_id},
-                      headers={"User-Agent": UA}, timeout=30)
-        r.raise_for_status()
-        d = r.json().get("results") or r.json()
+        def get():
+            r = httpx.get("https://api.dvidshub.net/asset", params={"api_key": self.keys["DVIDS_API_KEY"], "id": src_id},
+                          headers={"User-Agent": UA}, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        j = with_net_retry(get, self.log, self.stop, what=f"DVIDS asset {src_id}", status=self.status)
+        d = j.get("results") or j
         files = d.get("files") or []
         if isinstance(files, dict):
             files = list(files.values())
@@ -519,7 +524,8 @@ class Builder:
         min_start = num(asset.get("time_start"))
         with tempfile.TemporaryDirectory() as td:
             proxy = Path(td) / "proxy.mp4"
-            download(proxy_url, proxy, timeout=600)
+            # resumable: a dropped connection continues from the bytes already saved
+            download_resume(proxy_url, proxy, self.log, self.stop, status=self.status)
             dur = duration(proxy)
             shots = plan_shots(detect_cuts(proxy), dur, min_start)
             clean = []
@@ -550,15 +556,19 @@ class Builder:
         out, kf = self.dir / f"{base}.mp4", self.dir / f"{base}.jpg"
         tmp = self.dir / f"{base}.part.mp4"
         vf = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30,format=yuv420p"
-        try:
-            ua = ["-user_agent", UA] if str(url).startswith("http") else []
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{st}", *ua, "-i", url,
-                            "-t", f"{L}", "-an", "-vf", vf, *encoder_args(self.enc), str(tmp)],
-                           capture_output=True, timeout=900, check=True)
+        def cut():
+            # ffmpeg reconnects by itself after a drop; a stalled read gives up after 30 s and is retried here
+            run(["ffmpeg", "-y", "-loglevel", "error", *ffmpeg_net_args(url), "-ss", f"{st}", "-i", url,
+                 "-t", f"{L}", "-an", "-vf", vf, *encoder_args(self.enc), str(tmp)], timeout=900)
             if duration(tmp) < min(2.0, L * 0.5):
                 raise RuntimeError("cut too short")
+        try:
+            with_net_retry(cut, self.log, self.stop, what=f"1080p cut {base}", status=self.status)
             tmp.replace(out)
         except Exception as e:
+            if is_network_error(e):
+                tmp.unlink(missing_ok=True)
+                raise                     # the whole video is retried later, not marked failed
             tmp.unlink(missing_ok=True)
             self.log(f"  shot {base}: 1080p cut failed ({str(e)[-120:]})")
             return False
@@ -686,6 +696,7 @@ class Builder:
         lock = threading.Lock()
         count = [have]
         t0 = time.time()
+        retry_later = []
 
         def job(item):
             name, r = item
@@ -694,6 +705,13 @@ class Builder:
             try:
                 n = self.process_video(by_name[name], r)
             except Exception as e:
+                if is_network_error(e) or self.stop.is_set():
+                    # a connection problem is not the video's fault: it goes back in the queue
+                    with lock:
+                        retry_later.append(item)
+                    if not self.stop.is_set():
+                        self.log(f"  {name}: video {r['id']} interrupted by the network - will be retried")
+                    return
                 self._mark(r["id"], name, "failed", note=str(e)[-200:])
                 self.log(f"  {name}: video {r['id']} failed ({str(e)[-100:]})")
                 return
@@ -718,8 +736,14 @@ class Builder:
                 if not self._disk_ok():
                     self.stop.set()
                     break
+                if not wait_for_internet(self.log, self.stop, status=self.status):
+                    break
                 with ThreadPoolExecutor(4) as ex:
                     list(ex.map(job, batch[i:i + 4]))
+                with lock:
+                    for name, r in retry_later:          # interrupted videos go first next round
+                        queues.setdefault(name, []).insert(0, r)
+                    retry_later.clear()
                 if self.stop.is_set() or count[0] >= target:
                     break
         if not any(queues.values()) and count[0] < target:
@@ -893,7 +917,8 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
         settings = dict(settings, library_shots_per_video=int(per_video))
     if max_gb:
         settings = dict(settings, library_max_gb=float(max_gb))
-    st = {"state": "running", "started": time.time(), "target": int(target), "log": [], "progress": 0}
+    st = {"state": "running", "started": time.time(), "target": int(target), "log": [], "progress": 0,
+          "params": {"target": int(target), "categories": categories, "per_video": per_video, "max_gb": max_gb}}
     write_json(STATUS_FILE, st)
     lock = threading.Lock()
 
@@ -912,6 +937,7 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
     _JOB["stop"] = threading.Event()
 
     def run():
+        awake = keep_awake(log)
         try:
             n = Builder(load_keys(), settings, log, _JOB["stop"], status).build(int(target), categories)
             status(state="stopped" if _JOB["stop"].is_set() and n < int(target) else "done", shots=n,
@@ -921,6 +947,9 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
             log(f"ERROR: {e}")
             log(traceback.format_exc()[-1200:])
             status(state="error", error=str(e)[:400], finished=time.time())
+        finally:
+            if awake:
+                awake.terminate()
 
     _JOB["thread"] = threading.Thread(target=run, daemon=True)
     _JOB["thread"].start()
@@ -930,3 +959,34 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
 def stop_build():
     _JOB["stop"].set()
     return job_status()
+
+
+def keep_awake(log=None):
+    """macOS: stop the Mac from going to sleep while the library builds (caffeinate, ended with the build).
+    The lid must stay open on battery-only Macs - a closed lid still sleeps."""
+    import sys
+    if sys.platform != "darwin" or not shutil.which("caffeinate"):
+        return None
+    try:
+        p = subprocess.Popen(["caffeinate", "-ims"])
+        if log:
+            log("Mac sleep is blocked while the library builds (keep the lid open and the charger in)")
+        return p
+    except Exception:
+        return None
+
+
+def resume_if_interrupted(settings=None):
+    """The app (or the Mac) stopped in the middle of a build: start it again with the same choices."""
+    st = read_json(STATUS_FILE, {}) or {}
+    if st.get("state") != "running" or (_JOB["thread"] and _JOB["thread"].is_alive()):
+        return False
+    if not (settings or {}).get("library_auto_resume", True):
+        return False
+    p = st.get("params") or {}
+    try:
+        start_build(p.get("target") or st.get("target") or 1000, p.get("categories"), p.get("per_video"),
+                    p.get("max_gb"))
+        return True
+    except Exception:
+        return False

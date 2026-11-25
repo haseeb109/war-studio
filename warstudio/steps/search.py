@@ -29,7 +29,14 @@ def _cached_get(source, url, params, headers=None, ttl=7 * 86400):
         if not _empty(d):
             return d
         p.unlink(missing_ok=True)              # an empty answer cached by an older version: ask again
-    r = httpx.get(url, params=params, headers={"User-Agent": UA, **(headers or {})}, timeout=30)
+    from ..util import with_net_retry
+
+    def get():
+        resp = httpx.get(url, params=params, headers={"User-Agent": UA, **(headers or {})}, timeout=30)
+        if resp.status_code in (500, 502, 503, 504):
+            resp.raise_for_status()          # server hiccup: retried below
+        return resp
+    r = with_net_retry(get, what=f"{source} search", online_tries=3)
     if r.status_code == 429:
         raise SourceDown(f"{source} rate limit (429)")
     if r.status_code in (401, 403):

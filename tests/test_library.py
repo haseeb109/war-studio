@@ -154,7 +154,7 @@ def test_builder_process_video_end_to_end(settings, tmp_path, monkeypatch):
     monkeypatch.setattr(b, "_dvids_asset", lambda i: ({"time_start": 0}, [
         {"src": str(src), "height": 180, "width": 320}, {"src": str(src) + "?hd", "height": 180, "width": 320}]))
     monkeypatch.setattr(library, "pick_files", lambda files: (str(src), str(src), 1080))
-    monkeypatch.setattr(library, "download", lambda url, dest, timeout=0: shutil.copy(url, dest))
+    monkeypatch.setattr(library, "download_resume", lambda url, dest, *a, **k: shutil.copy(url, dest))
     monkeypatch.setattr(library, "plan_shots", lambda cuts, dur, ms: [(0.3, 2.4), (3.3, 2.4), (6.3, 2.4), (9.3, 2.4)])
     n = b.process_video(("Test cat", "q", "F-15E"), {"id": "video:1", "title": "F-15E B-Roll"})
     # the solid red shot (0.3 s) is a blank card -> rejected; two clean shots kept

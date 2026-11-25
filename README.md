@@ -177,3 +177,13 @@ Every video ("My Library (first)" on the Create page):
 No shot stays on screen longer than **3 s** (`max_shot_seconds`), counting the pause before the next sentence:
 sentences are cut at clause words / spaces, slivers under 1 s are merged, and a piece that still runs long
 (few words, long pause) is split in time with the same words so the picture changes. Average ~2 s.
+
+## Internet drops (v0.8.4)
+- **Library build**: when the internet goes, the build waits and checks every **5 s**, then continues by itself
+  (the Library tab shows "waiting for internet"). A video interrupted by the network goes back in the queue -
+  it is never marked failed. Preview files resume from the bytes already saved (HTTP Range). ffmpeg reconnects
+  on its own after a drop and gives up on a stalled read after 30 s (then retried).
+- **Mac sleep** is blocked while the library builds (`caffeinate`; keep the lid open on battery Macs).
+- **App closed / Mac restarted mid-build**: the build continues automatically when WarStudio starts
+  (`library_auto_resume`).
+- **Video runs**: footage searches, DVIDS lookups, clip downloads and previews retry every 5 s and wait out an outage.

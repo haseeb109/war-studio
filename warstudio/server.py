@@ -633,6 +633,14 @@ def serve(port=8765, open_browser=True):
     from .sfx import ensure_defaults
     ensure_defaults()
     recover_interrupted()
+
+    def _resume_library():
+        try:
+            from . import library
+            library.resume_if_interrupted(load_settings())
+        except Exception:
+            pass
+    threading.Timer(3.0, _resume_library).start()      # a build cut off by a crash / restart continues by itself
     if open_browser and not os.environ.get("WARSTUDIO_NO_BROWSER"):
         threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

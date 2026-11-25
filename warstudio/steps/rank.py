@@ -221,6 +221,8 @@ def run_step(proj, keys, settings, style, log):
     need = {c["preview_file"]: c["preview_url"] for cl in pool.values() for c in cl
             if c.get("preview_url") and not Path(c["preview_file"]).exists()}
     if need:
+        from ..util import wait_for_internet
+        wait_for_internet(log)
         log(f"downloading {len(need)} previews (24 at a time)")
         with ThreadPoolExecutor(24) as ex:
             list(ex.map(lambda kv: _safe_dl(kv[1], kv[0]), need.items()))
@@ -377,7 +379,8 @@ def run_step(proj, keys, settings, style, log):
 
 
 def _safe_dl(url, dest):
+    from ..util import with_net_retry
     try:
-        download(url, dest, timeout=30)
+        with_net_retry(lambda: download(url, dest, timeout=30), what="preview", online_tries=2)
     except Exception:
         pass
