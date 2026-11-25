@@ -65,6 +65,11 @@ class LibBuild(BaseModel):
     per_video: int = 4
     categories: list[str] = []
     max_gb: float = 100
+    auto_continue: bool = True
+
+
+class LibAuto(BaseModel):
+    on: bool = True
 
 
 @app.get("/api/library")
@@ -82,7 +87,7 @@ def library_build(b: LibBuild):
     if b.target < 10:
         raise HTTPException(400, "target must be at least 10 shots")
     try:
-        return library.start_build(b.target, b.categories or None, b.per_video, b.max_gb)
+        return library.start_build(b.target, b.categories or None, b.per_video, b.max_gb, b.auto_continue)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
 
@@ -91,6 +96,24 @@ def library_build(b: LibBuild):
 def library_stop():
     from . import library
     return library.stop_build()
+
+
+@app.post("/api/library/retry")
+def library_retry():
+    """Paused build -> continue from the same file; ended build -> start again where it stopped."""
+    from . import library
+    if not load_keys().get("DVIDS_API_KEY"):
+        raise HTTPException(400, "DVIDS_API_KEY is needed to build the library - add it in Settings")
+    try:
+        return library.retry_build()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/library/auto")
+def library_auto(a: LibAuto):
+    from . import library
+    return library.set_auto_continue(a.on)
 
 
 @app.get("/api/library/shots")

@@ -263,7 +263,11 @@
         <div><label>Stop at library size (GB)</label><input id="lbGb" type="number" value="100" min="5" step="10"></div>
         <div style="flex:0"><button class="btn" id="lbStart">Build / top up</button></div>
         <div style="flex:0"><button class="btn ghost" id="lbStop">Stop</button></div>
+        <div style="flex:0"><button class="btn ghost" id="lbRetry" disabled title="Paused by the internet: continue from the same file. Stopped build: start again where it stopped.">Retry</button></div>
       </div>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--text);font-size:13px;margin:-6px 0 12px">
+        <input type="checkbox" id="lbAuto" style="width:auto" checked> Auto-continue when the internet is really back
+        <span class="muted">(off = after 2 failed tries the build pauses and waits for the Retry button)</span></label>
       <label>Categories <span class="muted">(untick to skip)</span></label>
       <div id="lbCats" style="display:flex;flex-wrap:wrap;gap:6px 18px;margin:6px 0 14px"></div>
       <div id="lbStats" class="muted" style="margin-bottom:10px"></div>
@@ -462,10 +466,16 @@ async function loadLibrary() {
     ${st.learned_from_videos} learned from your videos ·
     DVIDS videos processed: ${vids} · ${st.free_gb} GB free on disk<br>Folder: ${esc(st.dir)}` +
     (job.state ? `<br>Build: <b>${esc(job.state)}</b>${job.running ? " (running)" : ""}${job.target ? ` · ${job.shots || st.shots}/${job.target}` : ""}` : "") +
-    (job.running && job.net ? ` · <b style="color:var(--yel)">${esc(job.net)} (checking every 5 s)</b>` : "");
+    (job.running && job.net === "paused" ? `<br><b style="color:var(--red,#e5534b)">&#9208; PAUSED: ${esc(job.net_reason || "internet problem")}</b>
+      - nothing new is tried. ${job.net_auto === false ? "Press <b>Retry</b> when the internet is back."
+      : "It continues by itself when the internet is really back, or press <b>Retry</b>."}` :
+     job.running && job.net ? ` · <b style="color:var(--yel)">${esc(job.net)} (checking every 5 s)</b>` : "");
   $("#lbLog").textContent = (job.log || []).join("\n");
   $("#lbLog").scrollTop = 1e9;
   $("#lbStart").disabled = !!job.running;
+  const canRestart = !job.running && ["stopped", "error", "running"].includes(job.state);
+  $("#lbRetry").disabled = !((job.running && job.net === "paused") || canRestart);
+  $("#lbRetry").textContent = canRestart ? "Retry / continue" : "Retry";
   clearTimeout(LB_TIMER);
   if (job.running && !$("#tab-library").classList.contains("hidden")) LB_TIMER = setTimeout(loadLibrary, 3000);
 }
@@ -474,11 +484,24 @@ $("#lbStart").onclick = async () => {
   if (!cats.length) { toast("Pick at least one category"); return; }
   try {
     await api("/api/library/build", {target: +$("#lbTarget").value, per_video: +$("#lbPer").value, categories: cats,
-                                     max_gb: +$("#lbGb").value});
+                                     max_gb: +$("#lbGb").value, auto_continue: $("#lbAuto").checked});
     toast("Library build started - you can leave it running overnight");
   } catch (e) { toast(e.message); }
   loadLibrary();
 };
+$("#lbRetry").onclick = async () => {
+  try {
+    const r = await api("/api/library/retry", {});
+    toast({resumed: "Continuing from the same file", restarted: "Build started again - it carries on where it stopped",
+           running: "The build is running - nothing to retry", nothing: "Nothing to retry"}[r.action] || "OK");
+  } catch (e) { toast(e.message); }
+  loadLibrary();
+};
+$("#lbAuto").onchange = async () => {
+  try { localStorage.setItem("ws_lbAuto", $("#lbAuto").checked ? "1" : "0"); } catch (e) {}
+  try { await api("/api/library/auto", {on: $("#lbAuto").checked}); } catch (e) {}
+};
+try { if (localStorage.getItem("ws_lbAuto") === "0") $("#lbAuto").checked = false; } catch (e) {}
 $("#lbStop").onclick = async () => { try { await api("/api/library/stop", {}); toast("Stopping after the current videos"); } catch (e) { toast(e.message); } loadLibrary(); };
 
 let LB_OFF = 0;

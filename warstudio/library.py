@@ -24,8 +24,8 @@ import httpx
 import numpy as np
 
 from .config import DATA_DIR, ROOT
-from .util import (UA, download, download_resume, duration, encoder_args, ffmpeg_net_args, is_network_error, num,
-                   read_json, run, video_encoder, wait_for_internet, with_net_retry, write_json)
+from .util import (UA, NetGate, download, download_resume, duration, encoder_args, ffmpeg_net_args, is_network_error,
+                   num, read_json, run, video_encoder, with_net_retry, write_json)
 
 STATUS_FILE = DATA_DIR / "library_status.json"
 _DB_LOCK = threading.RLock()
@@ -430,13 +430,18 @@ class Builder:
         self._dup = None            # [(id, phash, vec, source, src_id, start, length)]
         self.dupes = 0
         self.pages = {}             # category -> next DVIDS results page
+        # 2 network / DNS failures in a row pause the whole build (no next file is tried) until Retry is pressed
+        # or - auto-continue on - the internet really answers again
+        self.gate = NetGate(self.log, self.status, self.stop,
+                            max_fails=int(settings.get("library_pause_after", 2)),
+                            auto=str(settings.get("library_auto_continue", True)).lower() not in ("false", "0", "no", "off"))
 
     # -- DVIDS
     def _dvids_search(self, query, n=50, page=1):
         from .steps.search import search_dvids
         k = self.keys["DVIDS_API_KEY"]
         return with_net_retry(lambda: search_dvids(query + " B-Roll", k, n, page) + search_dvids(query, k, n, page),
-                              self.log, self.stop, what=f"DVIDS search '{query}'", status=self.status)
+                              self.log, self.stop, what=f"DVIDS search '{query}'", status=self.status, gate=self.gate)
 
     def _dvids_asset(self, src_id):
         def get():
@@ -444,7 +449,7 @@ class Builder:
                           headers={"User-Agent": UA}, timeout=30)
             r.raise_for_status()
             return r.json()
-        j = with_net_retry(get, self.log, self.stop, what=f"DVIDS asset {src_id}", status=self.status)
+        j = with_net_retry(get, self.log, self.stop, what=f"DVIDS asset {src_id}", status=self.status, gate=self.gate)
         d = j.get("results") or j
         files = d.get("files") or []
         if isinstance(files, dict):
@@ -525,7 +530,7 @@ class Builder:
         with tempfile.TemporaryDirectory() as td:
             proxy = Path(td) / "proxy.mp4"
             # resumable: a dropped connection continues from the bytes already saved
-            download_resume(proxy_url, proxy, self.log, self.stop, status=self.status)
+            download_resume(proxy_url, proxy, self.log, self.stop, status=self.status, gate=self.gate)
             dur = duration(proxy)
             shots = plan_shots(detect_cuts(proxy), dur, min_start)
             clean = []
@@ -564,7 +569,7 @@ class Builder:
             if duration(tmp) < min(2.0, L * 0.5):
                 raise RuntimeError("cut too short")
         try:
-            with_net_retry(cut, self.log, self.stop, what=f"1080p cut {base}", status=self.status)
+            with_net_retry(cut, self.log, self.stop, what=f"1080p cut {base}", status=self.status, gate=self.gate)
             tmp.replace(out)
         except Exception as e:
             if is_network_error(e):
@@ -704,6 +709,8 @@ class Builder:
             name, r = item
             if self.stop.is_set() or count[0] >= target:
                 return
+            if not self.gate.wait():            # paused: no next file starts until Retry / internet back
+                return
             try:
                 n = self.process_video(by_name[name], r)
             except Exception as e:
@@ -741,7 +748,7 @@ class Builder:
                 if not self._disk_ok():
                     self.stop.set()
                     break
-                if not wait_for_internet(self.log, self.stop, status=self.status):
+                if not self.gate.wait():
                     break
                 with ThreadPoolExecutor(4) as ex:
                     list(ex.map(job, batch[i:i + 4]))
@@ -904,7 +911,7 @@ def delete_shot(settings, shot_id):
 
 
 # ---------------------------------------------------------------- background job (one at a time)
-_JOB = {"thread": None, "stop": threading.Event()}
+_JOB = {"thread": None, "stop": threading.Event(), "gate": None}
 
 
 def job_status():
@@ -913,7 +920,7 @@ def job_status():
     return st
 
 
-def start_build(target, categories=None, per_video=None, max_gb=None):
+def start_build(target, categories=None, per_video=None, max_gb=None, auto_continue=True):
     from .config import load_keys, load_settings
     if _JOB["thread"] and _JOB["thread"].is_alive():
         raise RuntimeError("a library build is already running")
@@ -922,8 +929,10 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
         settings = dict(settings, library_shots_per_video=int(per_video))
     if max_gb:
         settings = dict(settings, library_max_gb=float(max_gb))
-    st = {"state": "running", "started": time.time(), "target": int(target), "log": [], "progress": 0,
-          "params": {"target": int(target), "categories": categories, "per_video": per_video, "max_gb": max_gb}}
+    settings = dict(settings, library_auto_continue=bool(auto_continue))
+    st = {"state": "running", "started": time.time(), "target": int(target), "log": [], "progress": 0, "net": "",
+          "params": {"target": int(target), "categories": categories, "per_video": per_video, "max_gb": max_gb,
+                     "auto_continue": bool(auto_continue)}}
     write_json(STATUS_FILE, st)
     lock = threading.Lock()
 
@@ -944,15 +953,18 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
     def run():
         awake = keep_awake(log)
         try:
-            n = Builder(load_keys(), settings, log, _JOB["stop"], status).build(int(target), categories)
+            b = Builder(load_keys(), settings, log, _JOB["stop"], status)
+            _JOB["gate"] = b.gate
+            n = b.build(int(target), categories)
             status(state="stopped" if _JOB["stop"].is_set() and n < int(target) else "done", shots=n,
-                   finished=time.time())
+                   finished=time.time(), net="")
         except Exception as e:
             import traceback
             log(f"ERROR: {e}")
             log(traceback.format_exc()[-1200:])
-            status(state="error", error=str(e)[:400], finished=time.time())
+            status(state="error", error=str(e)[:400], finished=time.time(), net="")
         finally:
+            _JOB["gate"] = None
             if awake:
                 awake.terminate()
 
@@ -963,6 +975,37 @@ def start_build(target, categories=None, per_video=None, max_gb=None):
 
 def stop_build():
     _JOB["stop"].set()
+    return job_status()
+
+
+def retry_build():
+    """Retry button. A paused build (internet / DNS problem) continues from the same file. A build that ended
+    early (stopped, error, app closed) starts again with the same choices: shots already in the library stay,
+    videos already processed are skipped, so it carries on where it stopped."""
+    if _JOB["thread"] and _JOB["thread"].is_alive():
+        g = _JOB.get("gate")
+        if g is not None and g.retry():
+            return {"action": "resumed", "job": job_status()}
+        return {"action": "running", "job": job_status()}
+    st = read_json(STATUS_FILE, {}) or {}
+    p = st.get("params") or {}
+    if st.get("state") in ("stopped", "error", "running") and (p.get("target") or st.get("target")):
+        start_build(p.get("target") or st.get("target"), p.get("categories"), p.get("per_video"), p.get("max_gb"),
+                    p.get("auto_continue", True))
+        return {"action": "restarted", "job": job_status()}
+    return {"action": "nothing", "job": job_status()}
+
+
+def set_auto_continue(on):
+    """Flip auto-continue on a running build (the checkbox in the Library tab)."""
+    g = _JOB.get("gate")
+    if g is not None:
+        g.auto = bool(on)
+    st = read_json(STATUS_FILE, {}) or {}
+    if st.get("params") is not None:
+        st["params"]["auto_continue"] = bool(on)
+        st["net_auto"] = bool(on)
+        write_json(STATUS_FILE, st)
     return job_status()
 
 
@@ -991,7 +1034,7 @@ def resume_if_interrupted(settings=None):
     p = st.get("params") or {}
     try:
         start_build(p.get("target") or st.get("target") or 1000, p.get("categories"), p.get("per_video"),
-                    p.get("max_gb"))
+                    p.get("max_gb"), p.get("auto_continue", True))
         return True
     except Exception:
         return False

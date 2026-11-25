@@ -194,6 +194,12 @@ sentences are cut at clause words / spaces, slivers under 1 s are merged, and a 
   tries before they count. One outage is logged once, not once per worker. A video interrupted by the network
   goes back in the queue (up to 3 times, then it is marked failed so it can never loop). Preview files resume from the bytes already saved (HTTP Range). ffmpeg reconnects
   on its own after a drop and gives up on a stalled read after 30 s (then retried).
+- **Pause + Retry (v0.9.2)**: 2 network / DNS failures in a row pause the WHOLE build - no next file and no next
+  search is tried. The Library tab shows "PAUSED". **Retry** continues from the very same file; with
+  "Auto-continue when the internet is really back" ticked (default) it also continues by itself once a named host
+  answers (checked every 5 s, backing off to 5 min if the line keeps dropping). Untick it to always wait for Retry.
+  A stopped / crashed build: **Retry / continue** starts it again with the same choices and carries on where it
+  stopped. One file that keeps failing while the internet works gives up after 6 tries (never blocks the build).
 - **Mac sleep** is blocked while the library builds (`caffeinate`; keep the lid open on battery Macs).
 - **App closed / Mac restarted mid-build**: the build continues automatically when WarStudio starts
   (`library_auto_resume`).

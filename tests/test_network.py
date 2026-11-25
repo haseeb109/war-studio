@@ -116,7 +116,6 @@ def test_library_requeues_video_after_network_error(tmp_path, monkeypatch):
     from warstudio import library
     s = {"library_dir": str(tmp_path / "lib"), "encoder": "libx264", "library_captions": "off"}
     monkeypatch.setattr(library, "STATUS_FILE", tmp_path / "st.json")
-    monkeypatch.setattr(library, "wait_for_internet", lambda *a, **k: True)
     b = library.Builder({"DVIDS_API_KEY": "k"}, s, lambda m: None)
     monkeypatch.setattr(b, "candidates", lambda q, want=12, max_page=40: [{"id": "video:1", "title": "t"}]
                         if not b.pages.get(q) else [])
@@ -142,7 +141,7 @@ def test_resume_if_interrupted(tmp_path, monkeypatch):
     util.write_json(tmp_path / "st.json", {"state": "running", "params": {"target": 5000, "categories": None,
                                                                          "per_video": 4, "max_gb": 100}})
     got = {}
-    monkeypatch.setattr(library, "start_build", lambda t, c=None, p=None, g=None: got.update(t=t, p=p, g=g))
+    monkeypatch.setattr(library, "start_build", lambda t, c=None, p=None, g=None, a=True: got.update(t=t, p=p, g=g))
     assert library.resume_if_interrupted({}) is True and got == {"t": 5000, "p": 4, "g": 100}
     util.write_json(tmp_path / "st.json", {"state": "done"})
     assert library.resume_if_interrupted({}) is False
@@ -201,7 +200,6 @@ def test_library_gives_up_on_a_video_after_three_interruptions(tmp_path, monkeyp
     from warstudio import library
     s = {"library_dir": str(tmp_path / "lib"), "encoder": "libx264", "library_captions": "off"}
     monkeypatch.setattr(library, "STATUS_FILE", tmp_path / "st.json")
-    monkeypatch.setattr(library, "wait_for_internet", lambda *a, **k: True)
     b = library.Builder({"DVIDS_API_KEY": "k"}, s, lambda m: None)
     monkeypatch.setattr(b, "candidates", lambda q, want=12, max_page=40: [{"id": "video:7", "title": "t"}]
                         if not b.pages.get(q) else [])
@@ -217,3 +215,161 @@ def test_library_gives_up_on_a_video_after_three_interruptions(tmp_path, monkeyp
     b.build(1, categories=["F-15E Strike Eagle"])
     assert len(tries) == 4                                     # first try + 3 re-queues, then marked failed
     assert library.stats(s)["videos"].get("failed") == 1
+
+
+# ---------------------------------------------------------------- pause after 2 failures + Retry button (v0.9.2)
+DNS = "[Errno 8] nodename nor servname provided, or not known"
+
+
+def _bg(fn):
+    out = {}
+
+    def run():
+        try:
+            out["v"] = fn()
+        except Exception as e:
+            out["e"] = e
+    t = threading.Thread(target=run)
+    t.start()
+    return t, out
+
+
+def test_gate_pauses_after_two_failures_and_retry_continues_the_same_request():
+    import time
+    logs, st = [], {}
+    g = util.NetGate(logs.append, lambda **k: st.update(k), max_fails=2, auto=False, every=0.01)
+    calls, net = [], {"down": True}
+
+    def fn():
+        calls.append(1)
+        if net["down"]:
+            raise OSError(DNS)
+        return "ok"
+    t, out = _bg(lambda: util.with_net_retry(fn, gate=g, what="DVIDS search"))
+    time.sleep(0.3)
+    assert g.paused and len(calls) == 2 and st["net"] == "paused" and "DNS" in st["net_reason"]
+    time.sleep(0.3)
+    assert len(calls) == 2                                      # paused: nothing more is tried
+    net["down"] = False
+    assert g.retry() is True
+    t.join(3)
+    assert out["v"] == "ok" and len(calls) == 3 and not g.paused and st["net"] == ""
+    assert sum("PAUSED" in m for m in logs) == 1 and any("RESUMED" in m for m in logs)
+    assert g.retry() is False                                   # not paused: Retry does nothing
+
+
+def test_paused_gate_holds_every_other_worker():
+    import time
+    g = util.NetGate(None, None, max_fails=2, auto=False, every=0.01)
+    t1, _ = _bg(lambda: util.with_net_retry(lambda: (_ for _ in ()).throw(OSError(DNS)), gate=g, gate_tries=99))
+    time.sleep(0.2)
+    started = []
+    t2, _ = _bg(lambda: g.wait() and started.append(1))         # the next file waits at the gate
+    time.sleep(0.3)
+    assert g.paused and started == []
+    stop = threading.Event()
+    g.stop = stop
+    stop.set()                                                  # Stop button ends the waiting workers
+    t1.join(3)
+    t2.join(3)
+    assert not t1.is_alive() and not t2.is_alive() and started == []
+
+
+def test_gate_auto_continues_when_the_internet_is_really_back():
+    import time
+    up = {"v": False}
+    g = util.NetGate(None, None, max_fails=2, auto=True, every=0.05, is_online=lambda: up["v"])
+    calls = []
+
+    def fn():
+        calls.append(1)
+        if not up["v"]:
+            raise httpx.ConnectError(DNS)
+        return "ok"
+    t, out = _bg(lambda: util.with_net_retry(fn, gate=g))
+    time.sleep(0.4)
+    assert g.paused and len(calls) == 2
+    up["v"] = True
+    t.join(3)
+    assert out["v"] == "ok" and not g.paused
+
+
+def test_one_broken_file_cannot_hold_the_build_forever():
+    g = util.NetGate(None, None, max_fails=2, auto=True, every=0.01, is_online=lambda: True)
+    calls = []
+
+    def fn():
+        calls.append(1)
+        raise httpx.ConnectError("connection reset by peer")
+    with pytest.raises(httpx.ConnectError):
+        util.with_net_retry(fn, gate=g, gate_tries=6)
+    assert len(calls) == 6
+
+
+def test_retry_build_resumes_or_restarts(tmp_path, monkeypatch):
+    from warstudio import library
+    monkeypatch.setattr(library, "STATUS_FILE", tmp_path / "st.json")
+    started = []
+    monkeypatch.setattr(library, "start_build", lambda *a: started.append(a))
+    util.write_json(tmp_path / "st.json", {"state": "stopped", "params": {"target": 5000, "categories": None,
+                                                                          "per_video": 4, "max_gb": 100,
+                                                                          "auto_continue": False}})
+    assert library.retry_build()["action"] == "restarted" and started == [(5000, None, 4, 100, False)]
+    util.write_json(tmp_path / "st.json", {"state": "done", "params": {"target": 5000}})
+    assert library.retry_build()["action"] == "nothing"
+    # a running, paused build: Retry opens the gate
+    g = util.NetGate(None, None, max_fails=1, auto=False, every=0.01)
+    g.failed(OSError(DNS), "x")
+    alive = threading.Thread(target=lambda: g.wait())
+    alive.start()
+    monkeypatch.setitem(library._JOB, "thread", alive)
+    monkeypatch.setitem(library._JOB, "gate", g)
+    assert library.retry_build()["action"] == "resumed" and not g.paused
+    alive.join(3)
+
+
+def test_build_pauses_and_tries_no_next_file_until_retry(tmp_path, monkeypatch):
+    import time
+    from warstudio import library
+    s = {"library_dir": str(tmp_path / "lib"), "encoder": "libx264", "library_captions": "off",
+         "library_auto_continue": False}
+    monkeypatch.setattr(library, "STATUS_FILE", tmp_path / "st.json")
+    monkeypatch.setattr(util, "RETRY_EVERY", 0.01)
+    logs = []
+    b = library.Builder({"DVIDS_API_KEY": "k"}, s, logs.append)
+    b.gate.every = 0.01
+    vids = [{"id": f"video:{i}", "title": "t"} for i in range(12)]
+    monkeypatch.setattr(b, "candidates", lambda q, want=12, max_page=40: vids if not b.pages.get(q) else [])
+    net = {"down": True}
+    asked, done = [], []
+
+    def get(*a, **k):
+        asked.append(k.get("params", {}).get("id"))
+        if net["down"]:
+            raise httpx.ConnectError(DNS)
+        raise RuntimeError("stop here")                          # internet back: the request itself goes through
+
+    monkeypatch.setattr(library.httpx, "get", get)
+
+    def process(cat, r):
+        b.pages[cat[1]] = 99
+        try:
+            b._dvids_asset(r["id"])
+        except RuntimeError:
+            pass
+        done.append(r["id"])
+        return 1
+    monkeypatch.setattr(b, "process_video", process)
+    monkeypatch.setattr(b, "upgrade_vectors", lambda: 0)
+    monkeypatch.setattr(library, "Captioner", lambda *a, **k: type("C", (), {"rr": None})())
+    t, out = _bg(lambda: b.build(3, categories=["F-15E Strike Eagle"]))
+    time.sleep(0.6)
+    n = len(asked)
+    assert b.gate.paused and n <= 4 and done == []              # at most the 4 files already in flight
+    time.sleep(0.4)
+    assert len(asked) == n                                      # paused: no next file, no new request
+    net["down"] = False
+    b.gate.retry()
+    t.join(5)
+    assert out.get("v") == 3 and set(asked[:n]) <= set(done)    # the paused files were finished, not skipped
+    assert any("PAUSED" in m for m in logs) and any("RESUMED" in m for m in logs)

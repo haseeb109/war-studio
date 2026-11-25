@@ -175,12 +175,133 @@ def wait_for_internet(log=None, stop=None, every=RETRY_EVERY, status=None, sleep
     return True
 
 
+class Stopped(RuntimeError):
+    pass
+
+
+class NetGate:
+    """One pause switch shared by every worker of a job (the library build).
+
+    After `max_fails` network / DNS errors in a row the WHOLE job pauses: no next file, no next search is tried.
+    It continues with the very same request when retry() is pressed (Retry button), or - with `auto` on - when a
+    named host really answers again (checked every 5 s; if the internet keeps dropping right after coming back the
+    check backs off up to 5 min)."""
+
+    def __init__(self, log=None, status=None, stop=None, max_fails=2, auto=True, every=RETRY_EVERY, is_online=None,
+                 clock=None):
+        import time as _t
+        self.log = log or (lambda *a, **k: None)
+        self.status = status or (lambda **k: None)
+        self.stop = stop
+        self.max_fails, self.auto, self.every = max(1, int(max_fails)), bool(auto), float(every)
+        self.is_online = is_online or online
+        self.clock = clock or _t.time
+        self._go = threading.Event()
+        self._go.set()
+        self._lock = threading.Lock()
+        self.fails = 0
+        self.pauses = 0
+        self._interval = self.every
+        self._next_check = 0.0
+        self._resumed_at = None
+
+    @property
+    def paused(self):
+        return not self._go.is_set()
+
+    def _stopped(self):
+        return self.stop is not None and self.stop.is_set()
+
+    def wait(self):
+        """Block while paused. False when the job was stopped."""
+        while not self._go.is_set():
+            if self._stopped():
+                return False
+            if self.auto:
+                check = False
+                with self._lock:
+                    if self.clock() >= self._next_check:
+                        self._next_check = self.clock() + self._interval
+                        check = True
+                if check and self.is_online():
+                    self.resume("internet is back")
+                    break
+            self._go.wait(min(1.0, self.every))
+        return not self._stopped()
+
+    def ok(self):
+        with self._lock:
+            self.fails = 0
+            if self._resumed_at is not None and self.clock() - self._resumed_at > 60:
+                self._interval, self._resumed_at = self.every, None      # stable again: back to 5 s checks
+
+    def failed(self, e, what="request"):
+        with self._lock:
+            self.fails += 1
+            n = self.fails
+            pause = n >= self.max_fails and self._go.is_set()
+            if pause:
+                self._go.clear()
+                self.pauses += 1
+                if self._resumed_at is not None and self.clock() - self._resumed_at < 60:
+                    self._interval = min(300.0, self._interval * 2)       # flapping: check less often
+                self._next_check = self.clock() + self._interval
+        kind = "DNS (name lookup)" if is_dns_error(e) else "internet"
+        if pause:
+            how = (f"it continues by itself when the internet is really back (checking every {int(self._interval)}s)"
+                   if self.auto else "press Retry when the internet is back")
+            self.log(f"PAUSED: {kind} problem - {n} failed tries in a row ({what}: {str(e)[:80]}). Nothing new is "
+                     f"tried until it is fixed; {how}.")
+            self.status(net="paused", net_reason=f"{kind} problem", paused_at=self.clock(), net_auto=self.auto)
+        elif self._go.is_set():
+            self.log(f"  {what}: {kind} error ({str(e)[:80]}) - try {n}/{self.max_fails}, again in {int(self.every)}s")
+            if self.stop is not None:
+                self.stop.wait(self.every)
+            else:
+                import time as _t
+                _t.sleep(self.every)
+
+    def retry(self, why="Retry pressed"):
+        return self.resume(why)
+
+    def resume(self, why):
+        with self._lock:
+            was = not self._go.is_set()
+            self.fails = 0
+            if was:
+                self._resumed_at = self.clock()
+                self._go.set()
+        if was:
+            self.log(f"RESUMED ({why}) - continuing from the same file")
+            self.status(net="", net_reason="", paused_at=None)
+        return was
+
+
 def with_net_retry(fn, log=None, stop=None, what="download", every=RETRY_EVERY, online_tries=4, status=None,
-                   sleep=None, is_online=None):
+                   sleep=None, is_online=None, gate=None, gate_tries=6):
     """Run fn(); on a network error: internet down -> wait (checking every 5 s) and retry, as long as it takes;
     internet up but this request keeps failing -> retry every 5 s, give up after `online_tries`.
-    DNS errors get DNS_GRACE extra tries first (DNS often comes back a minute after the connection)."""
+    DNS errors get DNS_GRACE extra tries first (DNS often comes back a minute after the connection).
+    With a `gate` (NetGate) the gate decides instead: 2 failures in a row pause the whole job, and this same
+    request is tried again after Retry / when the internet is back (it gives up after `gate_tries` failures, so one
+    broken file can never hold the job forever)."""
     import time as _t
+    if gate is not None:
+        tries = 0
+        while True:
+            if not gate.wait():
+                raise Stopped("stopped")
+            try:
+                r = fn()
+                gate.ok()
+                return r
+            except Exception as e:
+                if not is_network_error(e) or (stop is not None and stop.is_set()):
+                    raise
+                tries += 1
+                if tries >= gate_tries:
+                    raise
+                gate.failed(e, what)
     sleep = sleep or _t.sleep
     is_online = is_online or online
     fails = dns = 0
@@ -236,7 +357,8 @@ def ffmpeg_net_args(url):
     return ["-user_agent", UA] + list(_FF_NET)
 
 
-def download_resume(url, dest, log=None, stop=None, timeout=60, status=None, chunk=1 << 20, online_tries=6):
+def download_resume(url, dest, log=None, stop=None, timeout=60, status=None, chunk=1 << 20, online_tries=6,
+                    gate=None):
     """Download that survives a dropped connection: keeps what it has in dest.part and continues with an HTTP
     Range request (if the server ignores it, starts that file again). Retries every 5 s; waits out outages."""
     import httpx
@@ -266,4 +388,5 @@ def download_resume(url, dest, log=None, stop=None, timeout=60, status=None, chu
         part.replace(dest)
         return dest
 
-    return with_net_retry(attempt, log, stop, what=f"download {dest.name}", online_tries=online_tries, status=status)
+    return with_net_retry(attempt, log, stop, what=f"download {dest.name}", online_tries=online_tries, status=status,
+                          gate=gate)
