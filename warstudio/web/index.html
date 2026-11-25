@@ -159,6 +159,7 @@
         <div class="steps" id="jdSteps"></div>
         <div id="jdTime" style="margin:4px 0 6px"></div>
         <div id="jdQc" class="muted"></div>
+        <div id="jdMix" style="margin-top:8px"></div>
         <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Log and re-run</summary>
           <div style="display:flex;gap:8px;margin:10px 0"><select id="resumeSel" style="width:auto"></select>
             <button class="btn ghost" id="resumeBtn">Re-run from step</button>
@@ -441,6 +442,22 @@ const fmtT = x => { x = Math.max(0, x || 0); const m = Math.floor(x / 60), s = x
 const fmtClock = x => { x = Math.max(0, Math.round(x || 0)); const h = Math.floor(x / 3600), m = Math.floor(x % 3600 / 60), s = x % 60;
   return h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`; };
 const fmtDur = x => x ? `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, "0")}` : "";
+// where the footage came from: one bar, split by share of screen time
+const MIX_NAMES = {library: "My Library", dvids: "DVIDS", commons: "Commons", pexels: "Pexels", pixabay: "Pixabay",
+                   user: "Your uploads", none: "No footage"};
+const MIX_COLORS = {library: "var(--green)", dvids: "#4c8dff", commons: "#b083f0", pexels: "#2ec4b6",
+                    pixabay: "#f0883e", user: "var(--yel)", none: "var(--red)"};
+function mixBar(m) {
+  const k = m.order || Object.keys(m.percent || {});
+  const mmss = x => `${Math.floor(x / 60)}m ${String(Math.floor(x % 60)).padStart(2, "0")}s`;
+  return `<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;border:1px solid var(--line)">` +
+    k.map(s => `<div title="${esc(MIX_NAMES[s] || s)}" style="width:${m.percent[s]}%;background:${MIX_COLORS[s] || "var(--muted)"}"></div>`).join("") +
+    `</div><div style="display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:6px;font-size:13px">` +
+    k.map(s => `<span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${MIX_COLORS[s] || "var(--muted)"};margin-right:5px"></span>` +
+      `<b>${esc(MIX_NAMES[s] || s)} ${Math.round(m.percent[s])}%</b> <span class="muted">${m.shots[s]} shots · ${mmss(m.seconds[s])}</span></span>`).join("") +
+    `</div>`;
+}
+
 let LB_TIMER = null;
 async function loadLibrary() {
   let d;
@@ -634,6 +651,7 @@ async function refreshJob() {
   $("#markBtn").textContent = rv === "reviewed" ? "Reviewed ✓" : "Mark as reviewed";
   $("#markBtn").dataset.on = rv === "reviewed" ? "1" : "";
   $("#jdQc").textContent = d.qc ? `${d.qc.video_seconds || "?"}s · ${d.qc.beats} beats · ${d.qc.beats_without_footage.length} without footage · ${d.qc.integrated_lufs ?? "?"} LUFS · A/V drift ${d.qc.av_drift_seconds ?? "?"}s` : "";
+  $("#jdMix").innerHTML = d.qc && d.qc.source_mix ? mixBar(d.qc.source_mix) : "";
   const log = $("#jdLog"), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = (st.log || []).join("\n");
   if (atBottom) log.scrollTop = log.scrollHeight;

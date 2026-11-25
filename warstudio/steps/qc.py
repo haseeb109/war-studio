@@ -51,6 +51,34 @@ def write_credits(proj, beats, fetched):
     (Path(proj) / "credits.txt").write_text(txt)
 
 
+SOURCE_NAMES = {"library": "My Library", "dvids": "DVIDS", "commons": "Commons", "pexels": "Pexels",
+                "pixabay": "Pixabay", "user": "Your uploads", "none": "No footage"}
+
+
+def source_mix(beats, fetched, total=None):
+    """Where the footage came from: share of SCREEN TIME (each beat counts until the next beat starts) and of shots."""
+    secs, shots = {}, {}
+    for i, b in enumerate(beats):
+        src = (fetched.get(str(b["id"])) or {}).get("source") or "none"
+        end = float(beats[i + 1]["start"]) if i + 1 < len(beats) else float(total or b.get("end", b["start"]))
+        secs[src] = secs.get(src, 0.0) + max(0.0, end - float(b["start"]))
+        shots[src] = shots.get(src, 0) + 1
+    tot = sum(secs.values()) or 1.0
+    order = sorted(secs, key=lambda k: -secs[k])
+    return {"order": order,
+            "percent": {k: round(100 * secs[k] / tot, 1) for k in order},
+            "seconds": {k: round(secs[k], 1) for k in order},
+            "shots": {k: shots[k] for k in order}}
+
+
+def mix_line(mix):
+    def mmss(x):
+        return f"{int(x // 60)}m {int(x % 60):02d}s"
+    parts = [f"{SOURCE_NAMES.get(k, k)} {mix['percent'][k]:.0f}% ({mix['shots'][k]} shots, {mmss(mix['seconds'][k])})"
+             for k in mix["order"]]
+    return "Footage mix (screen time): " + " · ".join(parts)
+
+
 def run_step(proj, log):
     proj = Path(proj)
     beats = read_json(proj / "beats.json")
@@ -80,7 +108,9 @@ def run_step(proj, log):
         m = re.findall(r"I:\s+(-?\d+\.\d+) LUFS", p.stderr)
         if m:
             qc["integrated_lufs"] = float(m[-1])
+    qc["source_mix"] = source_mix(beats, fetched, vo["total"])
     write_json(proj / "qc.json", qc)
+    log(mix_line(qc["source_mix"]))
     log(f"QC: {qc.get('video_seconds', 0):.1f}s video, {len(qc['beats_without_footage'])} beats without footage, "
         f"loudness {qc.get('integrated_lufs', 'n/a')} LUFS")
     return qc

@@ -125,6 +125,12 @@ def run_project(proj, from_step=None):
                     + (f", {lb.dupes} already in the library (duplicates skipped)" if lb.dupes else ""))
             except Exception as e:
                 log(f"library: learning skipped ({str(e)[:120]})")
+        try:                                   # the footage mix is the last thing in the log
+            q = read_json(proj / "qc.json", {}) or {}
+            if q.get("source_mix"):
+                log(qc.mix_line(q["source_mix"]))
+        except Exception:
+            pass
         log(f"DONE in {fmt_duration(time.time() - t0)}" + (f" (all steps together: {fmt_duration(total)})"
                                                            if abs(total - (time.time() - t0)) > 5 else "") + " -> final.mp4")
     except Exception as e:

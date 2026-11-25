@@ -82,6 +82,14 @@ Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, over
 
 **Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, and the sound design below (from a NexLev study of the channel's latest videos).
 
+## Footage mix (v0.9.3)
+At the end of every run the log shows where the footage came from, by share of screen time, e.g.
+`Footage mix (screen time): My Library 74% (96 shots, 2m 41s) · DVIDS 26% (35 shots, 0m 57s)`. The video page
+shows the same as a coloured bar (also saved in `qc.json` -> `source_mix`).
+**Library only** (only "My Library" ticked): there is no online fallback, so every beat takes the best library
+shot - weaker matches (down to `library_only_min_clip`, 0.15), maps (an aerial shot) and systems the library does
+not have (closest shot of the same kind) instead of holding the previous clip past the 3 s rule.
+
 ## Sound design (v0.9.0)
 
 All local, no API cost. The old keyword / pivot-word / explosion-dropout rules are gone; sound now follows what the viewer sees and how the story moves.

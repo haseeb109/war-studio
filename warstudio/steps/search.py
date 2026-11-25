@@ -208,9 +208,11 @@ def order_for(fc, style):
     return order
 
 
-def library_first(specs, done, settings, log, project=None):
+def library_first(specs, done, settings, log, project=None, only=False):
     """Match every beat against the local shot library. A good match fills the beat's candidates from the
-    library only (no online search, no Gemini rerank for that beat). Returns how many beats matched."""
+    library only (no online search, no Gemini rerank for that beat). Returns how many beats matched.
+    only=True (the video uses nothing but the library): there is no online fallback, so every beat takes the best
+    library shot above a much lower bar - a weak but fresh shot beats holding the previous clip past 3 s."""
     try:
         from ..library import LibraryIndex, clip_text_vecs
         idx = LibraryIndex(settings, exclude_project=project)
@@ -221,24 +223,35 @@ def library_first(specs, done, settings, log, project=None):
         log("library: empty - every beat goes online (build it on the Library page)")
         return 0
     thr = float(settings.get("library_min_clip", 0.24))
+    floor = float(settings.get("library_only_min_clip", 0.15)) if only else thr
     todo = [sp for sp in specs if not done.get(str(sp["id"]))]
     if not todo:
         return 0
-    texts = [(sp.get("visual") or " ".join(sp.get("queries") or [])[:200] or "military").strip() for sp in todo]
+    if not only:
+        todo = [sp for sp in todo if sp.get("footage_class") != "map"]      # maps are searched online
+    texts = [("aerial view from high altitude over coastline and sea" if sp.get("footage_class") == "map" else
+              (sp.get("visual") or " ".join(sp.get("queries") or [])[:200] or "military")).strip() for sp in todo]
     vecs = clip_text_vecs(settings, texts)
-    hits = 0
+    hits = weak = subs = 0
     for sp, v, t in zip(todo, vecs, texts):
-        if sp.get("footage_class") == "map":
-            continue
         res = idx.match(v, sp.get("entity") or "", t, k=8)
-        if res and res[0]["clip_sim"] >= thr:
+        if only and sp.get("entity") and (not res or res[0]["clip_sim"] < floor):
+            # the named system is not in the library: the closest shot of the same kind stands in
+            res = idx.match(v, "", t, k=8)
+            subs += bool(res and res[0]["clip_sim"] >= floor)
+        if res and res[0]["clip_sim"] >= floor:
             done[str(sp["id"])] = res
             hits += 1
+            weak += res[0]["clip_sim"] < thr
     if idx.rotated:
         log(f"library: {len(idx.rotated)} shots rest this time (used in the last "
             f"{int(settings.get('library_rotation_videos', 5))} videos)")
     log(f"library: {hits}/{len(todo)} beats matched from {len(idx)} shots (no online search, no Gemini for these)"
-        + (f"; {len(todo) - hits} go online" if hits < len(todo) else ""))
+        + (f"; {weak} of them are weaker matches (library only: best shot available instead of holding the "
+           f"previous clip)" if weak else "")
+        + (f"; {subs} use a stand-in because the named system is not in the library" if subs else "")
+        + (f"; {len(todo) - hits} go online" if hits < len(todo) and not only else "")
+        + (f"; {len(todo) - hits} without any library shot" if hits < len(todo) and only else ""))
     return hits
 
 
@@ -251,7 +264,7 @@ def run_step(proj, keys, settings, style, log):
     down = set()
     picked = list(settings.get("job_sources") or [])
     use_library = (not picked or "library" in picked) and str(settings.get("use_library", True)).lower() not in ("false", "0", "no")
-    lib_hits = library_first(specs, done, settings, log, proj.name) if use_library else 0
+    lib_hits = library_first(specs, done, settings, log, proj.name, only=picked == ["library"]) if use_library else 0
     if picked == ["library"]:
         # this video uses only the library: beats without a library match keep the previous clip
         write_json(out_path, done)

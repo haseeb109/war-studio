@@ -346,3 +346,35 @@ def test_browser_api(settings, monkeypatch):
     assert c.post("/api/library/shots/1/favorite", json={"on": True}).json()["ok"]
     assert c.post("/api/library/shots/1/delete").json()["ok"]
     assert c.get("/api/library/thumb/1").status_code == 404
+
+
+def test_library_only_every_beat_gets_a_shot(settings, tmp_path, monkeypatch):
+    """Library-only video: weak matches, maps and systems the library lacks still get a library shot (holding the
+    previous clip would break the 3 s pacing rule)."""
+    from warstudio.steps import search
+    _add(settings, "a_f15", "F-15E Strike Eagle", "F-15E taking off")
+    write_json(tmp_path / "specs.json", [
+        {"id": 0, "queries": ["F-15E takeoff"], "footage_class": "real", "entity": "F-15E Strike Eagle", "visual": "F-15E taking off"},
+        {"id": 1, "queries": ["Su-34"], "footage_class": "real", "entity": "Su-34", "visual": "Su-34 bomber"},
+        {"id": 2, "queries": ["map"], "footage_class": "map", "entity": "", "visual": "map of the red sea"}])
+    v = np.zeros(512, dtype=np.float32)
+    v[ord("a")], v[1] = 0.2, 0.98                                # cosine 0.2 to the shot: under 0.24, over 0.15
+    v /= np.linalg.norm(v)
+    monkeypatch.setattr(library, "clip_text_vecs", lambda s, texts: np.stack([v for _ in texts]))
+    monkeypatch.setattr(search, "call_source", lambda *a, **k: pytest.fail("library only must not go online"))
+    logs = []
+    out = search.run_step(tmp_path, {}, dict(settings, job_sources=["library"]), {"footage": {}},
+                          lambda m, **k: logs.append(m))
+    assert all(out[str(i)] and out[str(i)][0]["source"] == "library" for i in range(3))
+    assert any("stand-in" in m for m in logs) and any("weaker matches" in m for m in logs)
+
+
+def test_footage_mix_by_screen_time():
+    from warstudio.steps import qc
+    beats = [{"id": 0, "start": 0.0, "end": 2.0}, {"id": 1, "start": 2.5, "end": 4.0}, {"id": 2, "start": 4.0, "end": 9.0}]
+    fetched = {"0": {"source": "library"}, "1": {"source": "dvids"}, "2": {"source": "library"}}
+    m = qc.source_mix(beats, fetched, total=10.0)
+    assert m["order"] == ["library", "dvids"] and m["shots"] == {"library": 2, "dvids": 1}
+    assert m["seconds"] == {"library": 8.5, "dvids": 1.5} and m["percent"] == {"library": 85.0, "dvids": 15.0}
+    line = qc.mix_line(m)
+    assert "My Library 85% (2 shots, 0m 08s)" in line and "DVIDS 15%" in line
