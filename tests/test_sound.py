@@ -8,6 +8,11 @@ from warstudio.config import load_style
 from warstudio.steps import specs as specs_step
 
 STYLE = load_style("beyond_military")
+LIVE = STYLE                                       # the locked style as the user runs it (clip audio only)
+import copy
+STYLE = copy.deepcopy(LIVE)                        # the v0.9 sound design, still tested so it can come back
+STYLE["sound_mode"] = "designed"
+STYLE["footage_audio"].update(natural=False, gap_db=-12, under_voice_db=-24)
 SR = sfx.SR
 
 
@@ -295,3 +300,24 @@ def test_ambient_shot_sound_sits_under_the_voice(tmp_path):
 def test_master_prompt_has_sound_cues_not_sfx():
     txt = (specs_step.ROOT / "prompts" / "master_prompt.md").read_text()
     assert '"intensity"' in txt and '"moment"' in txt and '"sfx"' not in txt
+
+
+def test_clip_audio_only_no_sfx_no_music_clip_sound_slightly_lower(tmp_path):
+    import numpy as np
+    assert sfx.clip_audio_only(LIVE)
+    sr = sfx.SR
+    sfx.write_wav(tmp_path / "vo.wav", np.zeros(sr * 4, dtype=np.float32))          # no voice: a pause
+    t = np.arange(sr * 3) / sr
+    tone = (0.1 * np.sign(np.sin(2 * np.pi * 90 * t)) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t))).astype(np.float32)
+    clip = tmp_path / "c.wav"
+    sfx.write_wav(clip, tone)
+    out = tmp_path / "o.wav"
+    sfx.mix(tmp_path / "vo.wav", [{"cat": "explosion", "t": 0.5, "gain_db": 0}], 4.0, LIVE, out,
+            footage=[{"bid": 0, "file": str(clip), "t": 0.0, "dur": 3.0, "kind": "ambient"}])
+    y = sfx.load_audio(out)
+    mid = y[sr // 2: int(2.5 * sr)]
+    src = tone[sr // 2: int(2.5 * sr)]
+    rms = lambda a: float(np.sqrt(np.mean(a.astype(np.float64) ** 2)))
+    ratio = 20 * np.log10(rms(mid) / rms(src))
+    assert -6 < ratio < -2                     # its own sound, ~4 dB lower, not normalised or ducked away
+    assert rms(y[int(3.3 * sr):]) < 1e-4       # nothing after the clip: no music bed, no sfx

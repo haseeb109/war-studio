@@ -610,6 +610,8 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
 
     rnd = random.Random(f"{seed}:sfx")
     cache = {}
+    if clip_audio_only(style):
+        events = []                                   # no sound effects in this mode, even old saved ones
     for e in events or []:
         files = sfx_files(e["cat"])
         if not files:
@@ -625,13 +627,21 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
         _add(out, x, s)
 
     _mix_footage(out, footage or [], talk, style.get("footage_audio", {}), log)
-    _mix_music(out, n, float(total), events or [], levels, talk, style.get("music", {}), music_file, seed, log)
+    if clip_audio_only(style):
+        log("sound: clip audio only - no sound effects, no music")
+    else:
+        _mix_music(out, n, float(total), events or [], levels, talk, style.get("music", {}), music_file, seed, log)
 
     peak = float(np.max(np.abs(out))) or 1.0
     if peak > 0.98:
         out *= 0.98 / peak
     write_wav(out_wav, out)
     return out_wav
+
+
+def clip_audio_only(style):
+    """Sound mode chosen by the user: voice + every clip's own sound, nothing generated."""
+    return str((style or {}).get("sound_mode", "")).lower() == "clip_audio_only"
 
 
 def _duck(talk, idx, gap_db, under_db):
@@ -670,8 +680,13 @@ def _mix_footage(out, items, talk, fa, log):
             continue
         kind = it.get("kind", "action")
         lv = amb if kind == "ambient" else fa
-        # same loudness for every clip, but a quiet clip is never pushed up by more than max_boost_db (hiss)
-        x = (x * min(db(float(lv.get("level_db", fa.get("level_db", -20)))) / rms, boost)).astype(np.float32)
+        if fa.get("natural"):
+            # the clip's own sound as it is, only a very loud clip (blasts) is brought down to max_rms_db
+            lv = fa
+            x = (x * min(1.0, db(float(fa.get("max_rms_db", -18))) / rms)).astype(np.float32)
+        else:
+            # same loudness for every clip, but a quiet clip is never pushed up by more than max_boost_db (hiss)
+            x = (x * min(db(float(lv.get("level_db", fa.get("level_db", -20)))) / rms, boost)).astype(np.float32)
         f = min(fade, len(x) // 2)
         x[:f] *= np.linspace(0, 1, f, dtype=np.float32)
         x[-f:] *= np.linspace(1, 0, f, dtype=np.float32)

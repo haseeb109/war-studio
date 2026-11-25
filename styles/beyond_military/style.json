@@ -43,6 +43,8 @@
     "units": "imperial_plus_metric"
   },
 
+  "sound_mode": "clip_audio_only",
+  "_sound_mode_note": "LOCKED by the user (v1.2): no sound effects and no music; voice + each clip's own sound only. Set to \"designed\" to bring back the v0.9 sound design.",
   "sfx": {
     "_note": "Sound design v2 (Beyond Military analysis): SFX follow what is ON SCREEN (the chosen shot's action), a UI blip on every on-screen label/time/number, whoosh + bass hit on maps, cut accents on most cuts in the hook and on scene changes after it, radio static on comms words, radar beep on lock/warning words, riser into attack/reveal moments, sustained chord on cliffhangers. Number/explanation beats stay quiet. Old keyword / pivot-word / music-dropout rules are gone.",
     "gains_db": {"ui_click": -18, "whoosh": -14, "metal_hit": -15, "bass_hit": -9, "riser": -13, "drone_chord": -14, "launch": -7, "explosion": -5, "flyby": -10, "jet_roar": -11, "rotor": -12, "gunfire": -8, "impact": -8, "flares": -12, "radar": -16, "radio_static": -18, "alarm": -14},
@@ -78,10 +80,13 @@
   "footage_audio": {
     "_note": "Every shot keeps its own sound, ducked under the voice: action shots (engines, guns, blasts) at level/gap/under_voice, all other shots as quiet ambience (ambient block). Clips that sound like speech or come from packages / interviews / briefings are skipped. all_shots=false = action shots only; footage_audio=false in settings = off.",
     "enabled": true,
+    "natural": true,
+    "max_rms_db": -18,
+    "_natural_note": "natural=true (user, v1.2): every clip keeps its OWN sound at its own level, a little lower: gap_db in pauses, under_voice_db while the voice speaks. Speech-like clips are still skipped (no other voice over the narration).",
     "actions": ["takeoff", "landing", "flying", "formation", "launch", "explosion", "firing", "hover", "taxi", "sailing"],
     "level_db": -20,
-    "gap_db": -12,
-    "under_voice_db": -24,
+    "gap_db": -4,
+    "under_voice_db": -12,
     "all_shots": true,
     "ambient": {"level_db": -20, "gap_db": -18, "under_voice_db": -32},
     "max_boost_db": 10,

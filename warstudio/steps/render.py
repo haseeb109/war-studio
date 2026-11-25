@@ -60,6 +60,8 @@ def loudnorm_filter(wav, lufs):
                        capture_output=True, text=True)
     try:
         m = json.loads(p.stderr[p.stderr.rindex("{"):p.stderr.rindex("}") + 1])
+        if float(m["input_i"]) < -70:              # (near) silent mix: nothing to normalise
+            return "anull"
         return (f"loudnorm=I={lufs}:TP=-1.0:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:"
                 f"measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
     except Exception:
@@ -149,14 +151,16 @@ def run_step(proj, settings, style, log, use_hf=True):
     video = proj / "video_only.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(video)])
 
-    log("mixing audio (voice + SFX + footage sound + music)")
+    log("mixing audio (voice + clip sound)" if sfx.clip_audio_only(style) else "mixing audio (voice + SFX + footage sound + music)")
     sfx.ensure_defaults()
     picks = read_json(proj / "picks.json", {}) or {}
     events = read_json(proj / "sfx_events.json")
     if sfx.needs_replan(events):
         log("sfx: this project still has sound events from the old rules - planning them again with the new sound design")
         events = None
-    if events is None:
+    if sfx.clip_audio_only(style):
+        events = []                               # user's choice: no sound effects, no music
+    elif events is None:
         events = sfx.plan_events(beats, specs, plan, style, picks)
         write_json(proj / "sfx_events.json", events)
     why = {}
