@@ -21,24 +21,31 @@ from .util import read_json, write_json, duration
 
 MAPS_DIR = ROOT / "styles" / "beyond_military" / "maps"
 HF_DIR = ROOT / "styles" / "beyond_military" / "hf"
+CHUNK = 8                   # runs per brain call (short replies come back complete)
 MAX_RUN = 15.0              # seconds: a longer run of map beats is split (one camera move stays readable)
 PAD = 1.0
 SIDES = ("enemy", "ally", "neutral")
 
 PROMPT = """You plan animated military news maps (dark tactical style). For every RUN below, read the narration and
 return where the camera looks and what is drawn. Use real geography. Coordinates are [longitude, latitude].
-Return JSON only:
-{"runs": [{"run": 0,
-  "title": "RED SEA",                                  // 1-3 words, the region, CAPITALS
-  "from": {"center": [42.0, 18.0], "zoom": 4.2},       // wide start
-  "to":   {"center": [43.3, 13.2], "zoom": 5.6},       // ends closer on the place the narration is about
-  "highlight": [{"iso": "YEM", "side": "enemy"}],      // ISO 3166 alpha-3, side: enemy / ally / neutral (max 4)
-  "countries": [{"name": "YEMEN", "at": [47.5, 15.6]}],// country names to print, inside the country (max 5)
-  "points": [{"name": "Hodeidah", "lon": 42.95, "lat": 14.8}],   // cities, bases, straits named (max 4)
-  "arrows": [{"from": [42.95, 14.8], "to": [43.3, 12.8]}],       // movement / attack / route (max 3)
-  "rings": [{"lon": 42.95, "lat": 14.8, "km": 180}]}]}           // a range or distance named (max 2)
-Rules: zoom 2 (continent) to 8 (city). The "to" view must show every point, arrow and ring. Only draw what the
-narration says; leave a list empty when nothing fits. "enemy" = the side the narration treats as the threat."""
+Reply with one JSON object only, exactly in this shape:
+{"runs": [{"run": 0, "title": "RED SEA",
+  "from": {"center": [42.0, 18.0], "zoom": 4.2}, "to": {"center": [43.3, 13.2], "zoom": 5.6},
+  "highlight": [{"iso": "YEM", "side": "enemy"}],
+  "countries": [{"name": "YEMEN", "at": [47.5, 15.6]}],
+  "points": [{"name": "Hodeidah", "lon": 42.95, "lat": 14.8}],
+  "arrows": [{"from": [42.95, 14.8], "to": [43.3, 12.8]}],
+  "rings": [{"lon": 42.95, "lat": 14.8, "km": 180}]}]}
+Fields:
+- title: 1-3 words, the region, CAPITALS.
+- from: wide start view. to: ends closer on the place the narration is about, and shows every point, arrow and ring.
+  zoom 2 = continent, 8 = city.
+- highlight: max 4 countries, ISO 3166 alpha-3 code, side enemy / ally / neutral ("enemy" = the side the narration
+  treats as the threat).
+- countries: max 5 country names to print, "at" inside the country.
+- points: max 4 cities, bases, islands or straits that are named.
+- arrows: max 3, movement / attack / route. rings: max 2, a range or distance that is named.
+Only draw what the narration says; use an empty list when nothing fits. Every run must be in the reply."""
 
 
 def _iso_set():
@@ -142,27 +149,45 @@ def plan_runs(runs, title, settings, keys, log):
     style = json.loads((ROOT / "styles" / "beyond_military" / "style.json").read_text())
     colors = style["maps"].get("highlight_colors") or {"enemy": "#b3261e", "ally": "#3a5a80", "neutral": "#4b5a6b"}
     isos = _iso_set()
-    user = f"VIDEO TITLE: {title}\n\nRUNS:\n" + "\n".join(
-        json.dumps({"run": i, "narration": r["text"][:900]}, ensure_ascii=False) for i, r in enumerate(runs))
-    plans, usd = {}, 0.0
-    for attempt in range(2):
-        try:
-            reply, usage = chat([{"role": "system", "content": PROMPT}, {"role": "user", "content": user}], brain,
-                                max_tokens=8000)
-            usd += ((usage.get("prompt_tokens") or 0) / 1e6 * float(settings.get("brain_price_in_per_m", 0.3) or 0.3) +
-                    (usage.get("completion_tokens") or 0) / 1e6 * float(settings.get("brain_price_out_per_m", 1.2) or 1.2))
-            data = extract_json(reply)
-            for p in (data.get("runs") if isinstance(data, dict) else data) or []:
-                try:
-                    i = int(p.get("run"))
-                except (TypeError, ValueError, AttributeError):
-                    continue
-                v = validate_plan(p, isos, colors)
-                if v and 0 <= i < len(runs):
-                    plans[i] = v
-            break
-        except Exception as e:
-            log(f"maps: plan attempt {attempt + 1} failed ({str(e)[:120]})")
+    plans, usd, lock = {}, 0.0, threading.Lock()
+    price_in = float(settings.get("brain_price_in_per_m", 0.3) or 0.3)
+    price_out = float(settings.get("brain_price_out_per_m", 1.2) or 1.2)
+
+    def one(c0):
+        nonlocal usd
+        idx = list(range(c0, min(c0 + CHUNK, len(runs))))
+        user = f"VIDEO TITLE: {title}\n\nRUNS:\n" + "\n".join(
+            json.dumps({"run": i, "narration": runs[i]["text"][:900]}, ensure_ascii=False) for i in idx)
+        for attempt in range(3):
+            reply = ""
+            try:
+                # DeepSeek's JSON mode sometimes answers with an empty message: the later tries go without it
+                reply, usage = chat([{"role": "system", "content": PROMPT}, {"role": "user", "content": user}], brain,
+                                    max_tokens=16000, json_mode=(attempt == 0))
+                with lock:
+                    usd += ((usage.get("prompt_tokens") or 0) / 1e6 * price_in +
+                            (usage.get("completion_tokens") or 0) / 1e6 * price_out)
+                data = extract_json(reply)
+                got = 0
+                for p in (data.get("runs") if isinstance(data, dict) else data) or []:
+                    try:
+                        i = int(p.get("run"))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    v = validate_plan(p, isos, colors)
+                    if v and i in idx:
+                        with lock:
+                            plans[i] = v
+                        got += 1
+                if got:
+                    return
+                raise ValueError("no usable run in the reply")
+            except Exception as e:
+                log(f"maps: plan for runs {idx[0]}-{idx[-1]}, try {attempt + 1} failed ({str(e)[:100]}; "
+                    f"reply: {(reply or 'empty').strip()[:80]!r})")
+
+    with ThreadPoolExecutor(4) as ex:
+        list(ex.map(one, range(0, len(runs), CHUNK)))
     return plans, usd
 
 

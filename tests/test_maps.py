@@ -68,3 +68,22 @@ def test_maps_off_or_no_renderer_changes_nothing(tmp_path, monkeypatch):
     assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_enabled": False}, {}, style, print, {}) == 0
     monkeypatch.setattr(maps, "hf_cmd", lambda: None)
     assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {}, {}, style, print, {}) == 0
+
+
+def test_plan_survives_empty_json_mode_reply(monkeypatch):
+    import warstudio.llm as llm
+    import warstudio.config as cfg
+    calls = []
+
+    def fake_chat(messages, brain, max_tokens=0, json_mode=True, timeout=0):
+        calls.append(json_mode)
+        if json_mode:
+            return "", {}
+        ids = [json.loads(l)["run"] for l in messages[1]["content"].split("RUNS:\n")[1].splitlines()]
+        return "```json\n" + json.dumps({"runs": [{"run": i, "to": {"center": [43, 13], "zoom": 5}} for i in ids]}) + "\n```", {}
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    monkeypatch.setattr(cfg, "brain_config", lambda *a, **k: {"key": "x"})
+    runs = [{"text": f"run {i}"} for i in range(11)]
+    plans, _ = maps.plan_runs(runs, "t", {}, {}, lambda *a, **k: None)
+    assert sorted(plans) == list(range(11))
+    assert calls.count(True) == 2 and calls.count(False) == 2      # 2 chunks, each: empty JSON mode -> plain retry
