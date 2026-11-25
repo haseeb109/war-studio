@@ -559,7 +559,8 @@ class Builder:
         def cut():
             # ffmpeg reconnects by itself after a drop; a stalled read gives up after 30 s and is retried here
             run(["ffmpeg", "-y", "-loglevel", "error", *ffmpeg_net_args(url), "-ss", f"{st}", "-i", url,
-                 "-t", f"{L}", "-an", "-vf", vf, *encoder_args(self.enc), str(tmp)], timeout=900)
+                 "-t", f"{L}", "-vf", vf, *encoder_args(self.enc), "-map", "0:v:0", "-map", "0:a:0?",
+                 "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", str(tmp)], timeout=900)
             if duration(tmp) < min(2.0, L * 0.5):
                 raise RuntimeError("cut too short")
         try:

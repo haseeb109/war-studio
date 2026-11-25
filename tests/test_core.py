@@ -66,27 +66,15 @@ def test_overlay_plan_gap_and_labels():
 
 
 def test_specs_validate_and_fallback():
-    ok, err = specs.validate([{"id": 1, "queries": ["F-15E flying"], "footage_class": "real", "sfx": ["launch", "bogus"]}], {1})
-    assert not err and ok[1]["sfx"] == ["launch"]
+    ok, err = specs.validate([{"id": 1, "queries": ["F-15E flying"], "footage_class": "real", "intensity": 3,
+                               "moment": "Attack", "sfx": ["launch"]}], {1})
+    assert not err and ok[1]["intensity"] == 3 and ok[1]["moment"] == "attack" and "sfx" not in ok[1]
+    ok, _ = specs.validate([{"id": 1, "queries": ["F-15E flying"], "intensity": 7, "moment": "boom"}], {1})
+    assert ok[1]["intensity"] is None and ok[1]["moment"] == ""
     _, err = specs.validate([{"id": 1, "queries": []}], {1, 2})
     assert err
     fb = specs.fallback_spec({"id": 3, "text": "The MQ-9 Reaper turns hard right over the coast."})
-    assert fb["queries"][0] and fb["footage_class"] == "real"
-
-
-def test_sfx_keywords_whole_word():
-    assert not sfx.keyword_hit("launch", "watching for missile launchers")
-    assert sfx.keyword_hit("detonat*", "the warhead detonated")
-
-
-def test_sfx_plan_events():
-    b = [{"id": 0, "sid": 0, "text": "At 17:14 the missile is fired", "start": 2, "end": 4},
-         {"id": 1, "sid": 1, "text": "But unknown to them, it explodes", "start": 10, "end": 12}]
-    sp = [{"id": 0, "footage_class": "map", "sfx": []}, {"id": 1, "footage_class": "real", "sfx": []}]
-    ev = sfx.plan_events(b, sp, {0}, STYLE)
-    cats = [e["cat"] for e in ev]
-    for c in ("ui_click", "whoosh", "launch", "riser", "explosion"):
-        assert c in cats
+    assert fb["queries"][0] and fb["footage_class"] == "real" and fb["moment"] == ""
 
 
 def test_sfx_synth_all_categories():

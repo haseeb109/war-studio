@@ -60,6 +60,10 @@ def choose_start(src_dur, need, used_offsets, min_start=0.0):
     return round(base, 2)
 
 
+# the clip's own sound is kept (engines, guns, blasts): the sound mix uses it on action beats
+AUDIO_ARGS = ["-map", "0:v:0", "-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
+
+
 def fetch_one(pick, start, need, out, W, H, fps):
     """Download `need` seconds from `start`, normalized. Written to a temp file and only renamed into place
     after it proves playable, so a broken download can never be reused later."""
@@ -70,8 +74,8 @@ def fetch_one(pick, start, need, out, W, H, fps):
     tmp = out.with_name(out.stem + ".part.mp4")
     try:
         with_net_retry(lambda: run(["ffmpeg", "-y", "-loglevel", "error", *net, "-ss", f"{start}", "-i",
-                                    pick["video_url"], "-t", f"{need:.2f}", "-an", "-vf", vf, "-c:v", "libx264",
-                                    "-preset", "veryfast", "-crf", "18", str(tmp)], timeout=600),
+                                    pick["video_url"], "-t", f"{need:.2f}", "-vf", vf, "-c:v", "libx264",
+                                    "-preset", "veryfast", "-crf", "18", *AUDIO_ARGS, str(tmp)], timeout=600),
                        what=f"clip {pick.get('source')}:{pick.get('id')}", online_tries=3)
         got = duration(tmp)
         if got < min(0.5, need * 0.5):

@@ -44,26 +44,46 @@
   },
 
   "sfx": {
-    "_note": "Every overlay pop-in gets a UI click. Map scenes open with a low whoosh + bass hit. Narrative pivots ('Unknown to...', 'But...') get a riser into a bass hit. Action words get matching one-shots (launch, flyby, explosion, gunfire, flares, radar tone, radio static, alarm). Music drops out for 0.6 s on explosions so the hit dominates.",
-    "gains_db": {
-      "ui_click": -16, "whoosh": -12, "bass_hit": -8, "riser": -14,
-      "launch": -6, "flyby": -8, "explosion": -4, "gunfire": -6, "flares": -10,
-      "radar": -14, "radio_static": -16, "alarm": -12, "impact": -8
-    },
-    "pivot_words": ["unknown to", "but", "suddenly", "then", "that's when", "until"],
-    "keywords": {
-      "launch": ["launch", "fires", "fired", "leaves the rail", "claws off", "screams off", "missile off"],
-      "explosion": ["explodes", "explosion", "bursts", "detonat*", "goes off", "impact", "hits the"],
-      "flyby": ["screams across", "flies over", "roars", "afterburner", "passes over", "races"],
-      "gunfire": ["gunfire", "rounds", "burst of fire", "opens fire", "ak-47", "machine gun"],
-      "flares": ["flares", "chaff"],
-      "radar": ["radar", "lock", "warning receiver", "tone", "painting"],
-      "radio_static": ["radio", "intercom", "calls it", "on the net"],
-      "alarm": ["alarm", "general quarters", "klaxon", "warning"]
-    },
-    "music_duck_db": -18,
-    "music_base_db": -22,
-    "explosion_music_dropout_seconds": 0.6
+    "_note": "Sound design v2 (Beyond Military analysis): SFX follow what is ON SCREEN (the chosen shot's action), a UI blip on every on-screen label/time/number, whoosh + bass hit on maps, cut accents on most cuts in the hook and on scene changes after it, radio static on comms words, radar beep on lock/warning words, riser into attack/reveal moments, sustained chord on cliffhangers. Number/explanation beats stay quiet. Old keyword / pivot-word / music-dropout rules are gone.",
+    "gains_db": {"ui_click": -18, "whoosh": -14, "metal_hit": -15, "bass_hit": -9, "riser": -13, "drone_chord": -14, "launch": -7, "explosion": -5, "flyby": -10, "jet_roar": -11, "rotor": -12, "gunfire": -8, "impact": -8, "flares": -12, "radar": -16, "radio_static": -18, "alarm": -14},
+    "hook_seconds": 60,
+    "max_per_minute": {"hook": 16, "body": 11},
+    "min_gap_seconds": {"hook": 1.0, "body": 2.5},
+    "cut_offset_db": -2,
+    "cooldown_seconds": {"default": 3.0, "ui_click": 0.8, "whoosh": 2.0, "metal_hit": 4.0, "bass_hit": 3.0, "riser": 20.0, "drone_chord": 30.0, "launch": 4.0, "explosion": 3.0, "flyby": 8.0, "jet_roar": 10.0, "rotor": 10.0, "gunfire": 4.0, "impact": 3.0, "flares": 6.0, "radar": 5.0, "radio_static": 8.0, "alarm": 10.0},
+    "comms_words": ["radio", "wingman", "tower", "call sign", "callsign", "transmission", "transmits", "comms", "intercom", "mayday", "over the net", "headset", "air traffic control", "dispatcher"],
+    "warning_words": ["locked on", "lock on", "lock-on", "missile warning", "warning receiver", "radar warning", "spike", "painted", "tone in his ears"]
+  },
+
+  "music": {
+    "_note": "One continuous bed: tracks in assets/music chained with crossfades (or music_file in Settings), else a generated tension bed. Intensity curve per beat from the brain's intensity/moment (or worked out from the shot): calm = quieter and darker, action = louder; 2 s swell into every attack/reveal; dip under cliffhanger chords; ducked under the voice, lifted in pauses; fade at the end.",
+    "under_voice_db": -20,
+    "gap_db": -14,
+    "intensity_db": {"1": -5, "2": 0, "3": 3},
+    "ramp_seconds": 1.5,
+    "min_hold_seconds": 6,
+    "attack_hold_seconds": 8,
+    "calm_lowpass_hz": 900,
+    "swell_db": 4,
+    "swell_seconds": 2.0,
+    "swell_release_seconds": 1.5,
+    "chord_dip_db": -6,
+    "chord_dip_seconds": 5,
+    "crossfade_seconds": 3.0,
+    "fade_in_seconds": 1.0,
+    "end_fade_seconds": 4.0,
+    "fallback": "generated"
+  },
+
+  "footage_audio": {
+    "_note": "The clip's own sound (engines, guns, blasts) at low level on action beats only, ducked under the voice. Clips that sound like speech or come from packages / interviews / briefings are skipped. Turn off with footage_audio=false in settings.",
+    "enabled": true,
+    "actions": ["takeoff", "landing", "flying", "formation", "launch", "explosion", "firing", "hover", "taxi", "sailing"],
+    "level_db": -20,
+    "gap_db": -12,
+    "under_voice_db": -24,
+    "fade_seconds": 0.12,
+    "skip_title_words": ["package", "interview", "briefing", "press", "remarks", "speech", "conference", "podcast", "news", "town hall", "ceremony", "testimony", "q&a"]
   },
 
   "audio": {"target_lufs": -14, "vo_gain_db": 0}

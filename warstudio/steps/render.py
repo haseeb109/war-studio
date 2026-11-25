@@ -2,7 +2,8 @@
 
 Per beat: take the fetched clip, apply slow drift + the footage-class grade, bake that beat's overlay in,
 encode exactly the beat's frame count (frame counts come from the cumulative timeline, so audio/video
-never drift). Segments are joined with stream copy, then the SFX/music mix is muxed and loudness-normalized.
+never drift). Segments are joined with stream copy, then the sound mix (sfx.py: on-screen SFX, footage sound,
+intensity-shaped music bed) is muxed and loudness-normalized.
 """
 import json
 from pathlib import Path
@@ -145,14 +146,28 @@ def run_step(proj, settings, style, log, use_hf=True):
     video = proj / "video_only.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(video)])
 
-    log("mixing audio (voice + SFX + music)")
+    log("mixing audio (voice + SFX + footage sound + music)")
     sfx.ensure_defaults()
+    picks = read_json(proj / "picks.json", {}) or {}
     events = read_json(proj / "sfx_events.json")
+    if sfx.needs_replan(events):
+        log("sfx: this project still has sound events from the old rules - planning them again with the new sound design")
+        events = None
     if events is None:
-        events = sfx.plan_events(beats, specs, {int(k) for k in plan}, style)
+        events = sfx.plan_events(beats, specs, plan, style, picks)
         write_json(proj / "sfx_events.json", events)
+    why = {}
+    for e in events:
+        k = str(e.get("rule") or "manual").split(":")[0]
+        why[k] = why.get(k, 0) + 1
+    mins = max(total / 60, 0.01)
+    log(f"sfx: {len(events)} sounds ({len(events) / mins:.1f}/min) - " + ", ".join(f"{k} {v}" for k, v in sorted(why.items())))
+    levels = sfx.plan_music(beats, specs, plan, style, picks)
+    footage = sfx.plan_footage_audio(beats, specs, picks, fetched, style, total, settings)
+    write_json(proj / "sound_plan.json", {"music_levels": levels, "footage_audio": footage})
     mixwav = proj / "mix.wav"
-    sfx.mix(proj / "vo.wav", events, total, style, mixwav, settings.get("music_file", ""))
+    sfx.mix(proj / "vo.wav", events, total, style, mixwav, settings.get("music_file", ""),
+            levels=levels, footage=footage, seed=proj.name, log=log)
 
     final = proj / "final.mp4"
     lufs = style["audio"]["target_lufs"]

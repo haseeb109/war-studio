@@ -1,4 +1,4 @@
-"""Step 3: beats -> shot specs (queries, footage class, entity, label, sfx) via the brain (DeepSeek official API by default).
+"""Step 3: beats -> shot specs (queries, footage class, entity, label, sound cues) via the brain (DeepSeek official API by default).
 
 Beats go in chunks of 40 with the surrounding script for context. Every reply is validated; a bad
 reply gets one repair round, then a deterministic fallback spec so the run never stops.
@@ -13,7 +13,7 @@ from ..llm import chat, extract_json
 from ..util import read_json, write_json, num
 
 CLASSES = {"real", "flir", "cockpit", "control_room", "map"}
-SFX = {"launch", "explosion", "flyby", "gunfire", "flares", "radar", "radio_static", "alarm", "impact"}
+MOMENTS = {"attack", "reveal", "cliffhanger"}
 STOP = set("the a an and or but of to in on at for with from by is are was were be been it its this that his her their "
            "he she they them we you as into over under than then so just still now one two three".split())
 CHUNK = 40
@@ -49,7 +49,7 @@ def fallback_spec(b):
     qs, tiers = build_queries([q1], [" ".join(words[:3]) or "military"], [CATEGORY_DEFAULT])
     return {"id": b["id"], "queries": qs, "tiers": tiers, "visual": b["text"][:160], "substitute": "",
             "category": CATEGORY_DEFAULT, "scene": "", "footage_class": "real", "entity": "", "avoid": [],
-            "label": "", "sfx": [], "fallback": True}
+            "label": "", "intensity": None, "moment": "", "fallback": True}
 
 
 def validate(items, ids):
@@ -79,12 +79,19 @@ def validate(items, ids):
         if fc not in CLASSES:
             errors.append(f"beat {it['id']}: footage_class '{fc}' not allowed")
             fc = "real"
-        sfx = [s for s in (it.get("sfx") or []) if s in SFX]
+        try:
+            intensity = int(it.get("intensity"))
+            intensity = intensity if intensity in (1, 2, 3) else None
+        except (TypeError, ValueError):
+            intensity = None                   # unknown: the sound planner works it out from the shot and the words
+        moment = str(it.get("moment") or "").strip().lower()
+        moment = moment if moment in MOMENTS else ""
         out[it["id"]] = {"id": it["id"], "queries": q, "tiers": tiers, "visual": visual[:200],
                          "substitute": str(it.get("substitute") or "").strip()[:80], "category": _clean_q(cat[0]),
                          "scene": str(it.get("scene") or "").strip().lower()[:60], "footage_class": fc,
                          "entity": str(it.get("entity") or "").strip(), "avoid": list(it.get("avoid") or [])[:3],
-                         "label": str(it.get("label") or "").strip()[:32], "sfx": sfx}
+                         "label": str(it.get("label") or "").strip()[:32],
+                         "intensity": intensity, "moment": moment}
     missing = ids - set(out)
     if missing:
         errors.append(f"missing beats: {sorted(missing)[:20]}")

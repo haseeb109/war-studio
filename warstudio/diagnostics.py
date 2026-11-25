@@ -216,14 +216,15 @@ def chk_mix(c):
 
 
 def chk_music():
-    from .config import MUSIC_DIR
+    from .sfx import music_tracks
     s = load_settings().get("music_file") or ""
-    files = [p.name for p in MUSIC_DIR.glob("*") if p.suffix.lower() in (".mp3", ".wav", ".m4a", ".flac", ".aiff")]
     if s and not Path(s).exists():
         return "warn", f"music_file setting points to a missing file: {s}"
-    if s or files:
-        return "ok", f"music: {s or files[0]}"
-    return "warn", "no background music (put a track in assets/music/)"
+    tracks = music_tracks(s)
+    if tracks:
+        names = ", ".join(p.name for p in tracks[:4]) + (f" +{len(tracks) - 4} more" if len(tracks) > 4 else "")
+        return "ok", f"{len(tracks)} track(s), chained with crossfades and shaped by story intensity: {names}"
+    return "warn", "no tracks in assets/music - the generated tension bed is used (your own tense tracks sound better)"
 
 
 def chk_keys():

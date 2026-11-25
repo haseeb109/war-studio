@@ -53,12 +53,23 @@ STEP 6 — GUARDS
   aerobatics", "toy drone", "video game", "3D render").
 - label: on the FIRST appearance of a named system that matters to the story, a short on-screen ID label
   (max 28 chars), e.g. "F-15E Strike Eagle". Otherwise "".
-- sfx: zero or more from [launch, explosion, flyby, gunfire, flares, radar, radio_static, alarm, impact], only
-  when the beat describes that sound-making event happening now.
+
+STEP 7 — SOUND CUES (the editor builds the music and the sound effects from these)
+Do not pick sound effects: the editor chooses them from what is on screen. You only mark the drama.
+- intensity: 1, 2 or 3 — how hard the music should push while this beat is spoken.
+  1 = calm: numbers, ranges, prices, specifications, background, history, explanation.
+  2 = tension: the normal story, build-up, movement, waiting, approach.
+  3 = action: a strike, launch, dogfight, chase, ambush or impact happening now.
+- moment: "" for almost every beat. Otherwise exactly one of:
+  "attack" — the strike / launch / impact / kill lands on THIS beat;
+  "reveal" — a twist, a surprise or a hidden fact lands on THIS beat ("Unknown to them...", "But the second
+             missile was a decoy.");
+  "cliffhanger" — the last beat of a section that leaves the viewer hanging before the next part.
+  Moments are rare: at most one every 30 seconds of narration.
 
 OUTPUT
 Return ONLY JSON:
 {"beats": [{"id": <int>, "visual": "...", "entity": "...", "exact_queries": [...], "substitute": "...",
             "substitute_queries": [...], "category_query": "...", "scene": "...", "footage_class": "...",
-            "avoid": [...], "label": "...", "sfx": [...]}]}
+            "avoid": [...], "label": "...", "intensity": 2, "moment": ""}]}
 One object per input beat, same ids, same order. Every field present.

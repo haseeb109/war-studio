@@ -195,7 +195,18 @@ def swap_clip(proj, bid, cand):
     d["fetched"].pop(bid, None)
     write_json(proj / "picks.json", d["picks"])
     write_json(proj / "fetched.json", d["fetched"])
-    _mark(proj, [bid])
+    _resound(proj, d, bid)
+    _mark(proj, [bid], audio=True)
+
+
+def _resound(proj, d, bid):
+    """The on-screen SFX of a beat follow its clip: re-plan them after a clip change."""
+    try:
+        style = load_style(read_json(proj / "project.json")["style"])
+        d["sfx"] = sfx.replan_beat(d["sfx"], d["beats"], d["specs"], style, d["picks"], bid)
+        write_json(proj / "sfx_events.json", d["sfx"])
+    except Exception:
+        pass
 
 
 def set_offset(proj, bid, start):
@@ -241,7 +252,8 @@ def use_upload(proj, bid, src, name, style):
     d["fetched"].pop(bid, None)
     write_json(proj / "picks.json", d["picks"])
     write_json(proj / "fetched.json", d["fetched"])
-    _mark(proj, [bid])
+    _resound(proj, d, bid)
+    _mark(proj, [bid], audio=True)
 
 
 def set_grade(proj, bid, fclass):

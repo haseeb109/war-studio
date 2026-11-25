@@ -65,11 +65,11 @@ One key per service. Searches are cached in `data/search_cache`, so repeated que
 |---|---|---|---|
 | 1 | voice | Script split into sentences; one ai33 voice file per sentence; measured durations give exact sentence timing | `vo/`, `vo.wav`, `vo.json` |
 | 2 | beats | One shot per sentence; first 3 minutes: sentences >= 3.2 s get 2 shots; any shot > 6 s is split | `beats.json` |
-| 3 | specs | Brain writes per beat: 3 search queries (literal first), footage class, exact entity, wrong matches to avoid, ID label, SFX events | `specs.json` |
+| 3 | specs | Brain writes per beat: 3 search queries (literal first), footage class, exact entity, wrong matches to avoid, ID label, sound cues (intensity 1-3, attack / reveal / cliffhanger moment) | `specs.json` |
 | 4 | search | DVIDS -> Wikimedia Commons (no key) -> Pexels -> Pixabay; metadata + 640px previews only | `candidates.json` |
 | 5 | rank | CLIP (local, MPS) scores previews vs narration -> top 5 -> numbered collage -> Gemini picks the winner. Same source clip not reused within 90 s | `picks.json`, `previews/` |
 | 6 | fetch | Downloads only beat length + 1 s of each winner, normalized to 1080p30, into `library/raw/` (kept for the future library phase) | `fetched.json` |
-| 7 | render | Per beat: slow drift, footage-class grade (FLIR = mono/contrast/noise), overlay baked in, exact frame count from the timeline. Stream-copy join. Voice + SFX + music mix, two-pass loudnorm | `final.mp4` |
+| 7 | render | Per beat: slow drift, footage-class grade (FLIR = mono/contrast/noise), overlay baked in, exact frame count from the timeline. Stream-copy join. Sound mix (on-screen SFX, footage sound, intensity-shaped music), two-pass loudnorm | `final.mp4`, `sfx_events.json`, `sound_plan.json` |
 | 8 | qc | Contact sheet, footage log (source URL + offset per shot), A/V drift and loudness check | `qc.json`, `contact_sheet.jpg`, `footage_log.csv` |
 
 Same check from Terminal: `uv run python run.py doctor` (add `--full` for the deep version). Report: `data/diagnostics/latest.txt`.
@@ -78,15 +78,24 @@ CLI: `uv run python run.py new "Title" script.txt --voice elevenlabs_nPczCjzI2de
 
 ## Styles
 
-Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, overlay look, SFX rules) and `hf/overlay_template.html` (HyperFrames / GSAP animation). Copy `styles/beyond_military` to make a new channel style; it appears in the GUI automatically.
+Each style is a folder in `styles/<id>/` with `style.json` (pacing, grades, overlay look, sound design) and `hf/overlay_template.html` (HyperFrames / GSAP animation). Copy `styles/beyond_military` to make a new channel style; it appears in the GUI automatically.
 
-**Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, UI click on every callout, whoosh + bass hit on map scenes, riser into a bass hit on narrative pivots ("Unknown to...", "But..."), one-shot SFX on action words, music ducked under voice and dropped out on explosions.
+**Beyond Military** (default) was locked from frame-by-frame analysis of 5 channel videos: hard cuts on sentence starts or the named noun, average shot 2.2-3.5 s, literal matches for every named system, yellow imperial+metric callouts, black ID labels, FLIR grade for sensor shots, and the sound design below (from a NexLev study of the channel's latest videos).
 
-## Sound effects and music
+## Sound design (v0.9.0)
 
-Built-in synthesized SFX are generated on first run (`assets/sfx/_generated/`). To use real sounds, put `.wav`/`.mp3` files in `assets/sfx/<category>/`; your files always win over the built-in ones. Categories: `ui_click whoosh bass_hit riser launch explosion flyby gunfire flares radar radio_static alarm impact`.
+All local, no API cost. The old keyword / pivot-word / explosion-dropout rules are gone; sound now follows what the viewer sees and how the story moves.
 
-Background music: put a track in `assets/music/` (or set `music_file` in Settings). It loops, ducks under the voice, and drops out on explosions.
+**Sound effects follow the shot on screen** (the library shot's action tag, else the beat's visual line): takeoff/landing -> `jet_roar`, flying/formation -> `flyby`, helicopters -> `rotor`, launch and rocket artillery -> `launch`, explosion -> `explosion` + `bass_hit`, small arms -> `gunfire`, big guns -> `impact` + `bass_hit`, consoles/radar screens -> `radar`, flares/chaff -> `flares`; drones get nothing (they are quiet).
+Plus: a UI blip on every label / timestamp / number box, whoosh + low bass hit on map beats, cut accents (`whoosh` / `metal_hit`) on most cuts in the first 60 s and on scene changes after that, `radio_static` on comms words (wingman, radio, tower...), a radar beep on lock / warning words.
+**Moments** from the brain: `attack` / `reveal` -> a riser that ends exactly on the beat + bass hit; `cliffhanger` -> a sustained dark chord.
+**Density**: up to 16 sound moments a minute in the hook, about 11 after it; number / explanation beats only get the UI blip. Every event in `sfx_events.json` says why it is there (`rule`).
+
+**Music**: one continuous bed. Tracks in `assets/music/` are chained with crossfades (a 30-min video does not loop one track); without tracks a generated tension bed is used. An intensity curve (brain `intensity` + moments) shapes it: calm beats quieter and darker, action louder, a 2 s swell into every attack/reveal, a dip under cliffhanger chords, ducked to -20 dB under the voice and lifted to -14 dB in pauses, fade-out at the end. Levels hold at least 6 s, so the music never pumps from shot to shot. See `sound_plan.json`.
+
+**Footage sound**: on action beats the clip's own sound (engines, guns, blasts) is mixed in low and ducked under the voice. Clips that sound like speech or come from packages / interviews / briefings are skipped. Clips and library shots downloaded before v0.9.0 have no sound track. Off switch: `footage_audio: false` in settings.
+
+Your own SFX files always win over the built-in ones: put `.wav`/`.mp3` files in `assets/sfx/<category>/`. Categories: `ui_click whoosh metal_hit bass_hit riser drone_chord launch explosion flyby jet_roar rotor gunfire impact flares radar radio_static alarm`. Tuning lives in `styles/beyond_military/style.json` (`sfx`, `music`, `footage_audio`).
 
 ## Overlays (HyperFrames)
 
