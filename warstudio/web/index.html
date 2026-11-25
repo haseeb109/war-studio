@@ -483,7 +483,8 @@ async function loadLibrary() {
   $("#lbStats").innerHTML = `<b>${st.shots}</b> shots · ${st.gb} GB (~${per} MB per shot, 100 GB ≈ ${Math.round(100000 / per).toLocaleString()} shots) ·
     ${st.learned_from_videos} learned from your videos ·
     DVIDS videos processed: ${vids} · ${st.free_gb} GB free on disk` +
-    (st.sound ? `<br>Shot sound: <b>${st.sound.with}</b> with their own sound · ${st.sound.none} from silent videos` +
+    (st.sound ? `<br>Shot sound: <b>${st.sound.with}</b> with their own sound (checked frame by frame) · ${st.sound.none} from silent videos` +
+      (st.sound.unverified ? ` · ${st.sound.unverified} left silent (picture did not match the source)` : "") +
       (st.sound.unknown ? ` · <b style="color:var(--yel)">${st.sound.unknown} without sound yet</b> (press "Add sound to old shots")` : "") : "") +
     `<br>Folder: ${esc(st.dir)}` +
     (job.state ? `<br>${job.kind === "sound" ? "Adding sound" : "Build"}: <b>${esc(job.state)}</b>${job.running ? " (running)" : ""}${job.target ? ` · ${job.shots || st.shots}/${job.target}` : ""}` : "") +

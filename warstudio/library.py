@@ -169,6 +169,7 @@ def stats(settings=None):
         deleted = con.execute("SELECT COUNT(*) FROM deleted").fetchone()[0]
         sound = {"with": con.execute("SELECT COUNT(*) FROM shots WHERE audio = 1").fetchone()[0],
                  "none": con.execute("SELECT COUNT(*) FROM shots WHERE audio = 0").fetchone()[0],
+                 "unverified": con.execute("SELECT COUNT(*) FROM shots WHERE audio = -1").fetchone()[0],
                  "unknown": con.execute("SELECT COUNT(*) FROM shots WHERE audio IS NULL").fetchone()[0]}
         con.close()
     size = sum(f.stat().st_size for f in lib_dir(settings).glob("*.mp4"))
@@ -371,6 +372,80 @@ def has_audio(path):
     if r.returncode != 0 and is_network_error(RuntimeError(r.stderr)):
         raise RuntimeError(f"ffprobe network error: {r.stderr[-200:]}")
     return bool(r.stdout.strip())
+
+
+ALIGN_W, ALIGN_H, ALIGN_FPS = 96, 54, 30       # tiny grey frames used to prove the sound belongs to the picture
+ALIGN_MIN = 0.85                                 # mean frame correlation needed (same video ~0.95+, another <0.6)
+
+
+def _grey_frames(path):
+    """The shot's own frames, tiny and grey (it is already 1920x1080 @ 30 fps)."""
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-an", "-vf",
+                          f"scale={ALIGN_W}:{ALIGN_H}:force_original_aspect_ratio=increase,crop={ALIGN_W}:{ALIGN_H},"
+                          f"fps={ALIGN_FPS},format=gray", "-f", "rawvideo", "-"], capture_output=True, timeout=120).stdout
+    a = np.frombuffer(raw, dtype=np.uint8)
+    n = len(a) // (ALIGN_W * ALIGN_H)
+    return a[:n * ALIGN_W * ALIGN_H].reshape(n, ALIGN_W * ALIGN_H)
+
+
+def _norm_frames(f):
+    x = f.astype(np.float32)
+    x -= x.mean(axis=1, keepdims=True)
+    n = np.linalg.norm(x, axis=1, keepdims=True)
+    return np.where(n > 1e-3, x / np.maximum(n, 1e-3), 0.0)
+
+
+MOTION_MIN = 1.5       # mean grey-level change between frames that counts as movement
+
+
+def _shift_scores(A, B, pre, lo, hi, max_shift):
+    out = {}
+    for d in range(-max_shift, max_shift + 1):
+        k = np.arange(lo, hi)
+        j = k + pre + d
+        m = (j >= 0) & (j < len(B))
+        if m.sum() >= 0.8 * len(k) and len(k):
+            out[d] = float((A[k[m]] * B[j[m]]).sum(axis=1).mean())
+    return out
+
+
+def verify_alignment(shot, src, pre_frames, max_shift=15, exact_file=False):
+    """Prove that `src` (frames of a source file starting `pre_frames` before the recorded shot start) shows this
+    shot at these seconds. Two proofs:
+      picture - the frames look the same (correlation >= ALIGN_MIN): the same video;
+      timing  - the frame-to-frame MOVEMENT lines up at one shift, clearly better than every other shift, and both
+                halves of the shot agree on it: the same seconds, to one frame.
+    A moving shot needs both. A still shot cannot prove its timing: it is accepted only from the exact file the shot
+    was cut from (`exact_file`, same timeline by construction) at the recorded start. Returns
+    {ok, offset (frames), score, motion, still}."""
+    no = {"ok": False, "offset": 0, "score": 0.0, "motion": 0.0, "still": True}
+    if len(shot) < 4 or len(src) < 4:
+        return no
+    A, B = _norm_frames(shot), _norm_frames(src)
+    dS = np.diff(shot.astype(np.int16), axis=0)
+    dR = np.diff(src.astype(np.int16), axis=0)
+    moving = float((np.abs(dS).mean(axis=1) > MOTION_MIN).mean())
+    still = moving < 0.3
+    look = _shift_scores(A, B, pre_frames, 0, len(A), max_shift)
+    if still:
+        sc = look.get(0, 0.0)
+        return {"ok": bool(exact_file and sc >= ALIGN_MIN), "offset": 0, "score": round(sc, 4), "motion": 0.0,
+                "still": True}
+    mA, mB = _norm_frames(dS), _norm_frames(dR)
+    mot = _shift_scores(mA, mB, pre_frames, 0, len(mA), max_shift)
+    if not mot:
+        return no
+    best = max(mot, key=mot.get)
+    others = [v for d, v in mot.items() if abs(d - best) > 2]
+    margin = mot[best] - (max(others) if others else 0.0)
+    ok = mot[best] >= 0.5 and margin >= 0.15 and look.get(best, 0.0) >= ALIGN_MIN
+    if ok and len(mA) >= 20:
+        h1 = _shift_scores(mA, mB, pre_frames, 0, len(mA) // 2, max_shift)
+        h2 = _shift_scores(mA, mB, pre_frames, len(mA) // 2, len(mA), max_shift)
+        if h1 and h2 and abs(max(h1, key=h1.get) - max(h2, key=h2.get)) > 1:
+            ok = False                                       # the halves disagree: the timelines drift
+    return {"ok": bool(ok), "offset": best, "score": round(look.get(best, 0.0), 4), "motion": round(mot[best], 4),
+            "still": False}
 
 
 def pick_files(files):
@@ -811,7 +886,7 @@ class Builder:
         total = len(todo)
         self.log(f"sound: {local} shots already had sound; {total} shots from {len(groups)} DVIDS videos get theirs "
                  f"now (audio only, from the smallest file of each video)")
-        done, silent, t0 = [0], [0], time.time()
+        done, silent, unver, t0 = [0], [0], [0], time.time()
         lock = threading.Lock()
 
         def one(item):
@@ -821,9 +896,12 @@ class Builder:
             try:
                 _, files = self._dvids_asset(src_id)
                 proxy_url, full_url, _ = pick_files(files)
-                url = proxy_url or full_url
-                if not url or not with_net_retry(lambda: has_audio(url), self.log, self.stop,
-                                                 what=f"sound check {src_id}", gate=self.gate):
+                urls = []
+                for u in (proxy_url, full_url):          # small file first; the exact file the shot came from second
+                    if u and u not in urls and with_net_retry(lambda u=u: has_audio(u), self.log, self.stop,
+                                                              what=f"sound check {src_id}", gate=self.gate):
+                        urls.append(u)
+                if not urls:
                     self._set_audio([r["id"] for r in shots], 0)
                     with lock:
                         silent[0] += len(shots)
@@ -832,9 +910,11 @@ class Builder:
                 for r in shots:
                     if self.stop.is_set():
                         return
-                    self._mux_sound(r, url)
+                    ok = self._mux_sound(r, urls, full_url)
                     with lock:
                         done[0] += 1
+                        if not ok:
+                            unver[0] += 1
             except Exception as e:
                 if self.stop.is_set():
                     return
@@ -843,7 +923,8 @@ class Builder:
             with lock:
                 d, sl = done[0], silent[0]
             rate = d / max(time.time() - t0, 1) * 3600
-            self.log(f"  sound: {d}/{total} shots done (~{rate:.0f}/hour), {sl} from videos without sound")
+            self.log(f"  sound: {d}/{total} shots done (~{rate:.0f}/hour), {sl} from videos without sound, "
+                     f"{unver[0]} left silent (picture did not match the source exactly)")
             self.status(shots=d, target=total, progress=min(1.0, d / max(total, 1)))
 
         with ThreadPoolExecutor(workers) as ex:
@@ -852,10 +933,13 @@ class Builder:
             con = _db(self.settings)
             have = con.execute("SELECT COUNT(*) FROM shots WHERE audio = 1").fetchone()[0]
             none = con.execute("SELECT COUNT(*) FROM shots WHERE audio = 0").fetchone()[0]
+            bad = con.execute("SELECT COUNT(*) FROM shots WHERE audio = -1").fetchone()[0]
             left = con.execute("SELECT COUNT(*) FROM shots WHERE audio IS NULL").fetchone()[0]
             con.close()
-        self.log(f"sound {'stopped' if self.stop.is_set() else 'done'}: {have} shots have their own sound, "
-                 f"{none} come from videos without sound" + (f", {left} still to do (press Retry)" if left else ""))
+        self.log(f"sound {'stopped' if self.stop.is_set() else 'done'}: {have} shots have their own sound "
+                 f"(every one checked frame by frame against its source), {none} come from videos without sound, "
+                 f"{bad} left silent because the picture could not be matched"
+                 + (f", {left} still to do (press Retry)" if left else ""))
         return done[0]
 
     def _audio_known(self, shot_id):
@@ -872,25 +956,72 @@ class Builder:
             con.commit()
             con.close()
 
-    def _mux_sound(self, r, url):
+    def _mux_sound(self, r, urls, exact=None):
+        """Add the shot's own sound - only when it is PROVEN to belong to this picture (verify_alignment: same
+        video AND same seconds to one frame; still shots only from the exact file they were cut from). One read
+        of the source per file tried (audio + tiny grey frames of the same seconds +-0.5 s). No proof in any file
+        -> the shot stays silent (audio = -1). Returns True when sound was added."""
         f = Path(r["file"])
-        aud = f.with_name(f.stem + ".sound.part.m4a")
         tmp = f.with_name(f.stem + ".sound.part.mp4")
+        aud = f.with_name(f.stem + ".sound.part.m4a")
         try:
-            def cut():
-                run(["ffmpeg", "-y", "-loglevel", "error", *ffmpeg_net_args(url), "-ss", f"{num(r['src_start'])}",
-                     "-i", url, "-t", f"{num(r['length'])}", "-vn", "-map", "0:a:0", "-c:a", "aac", "-b:a", "128k",
-                     "-ar", "48000", "-ac", "2", str(aud)], timeout=300)
-            with_net_retry(cut, self.log, self.stop, what=f"sound {f.name}", gate=self.gate)
-            run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(f), "-i", str(aud), "-map", "0:v:0", "-map", "1:a:0",
-                 "-c", "copy", "-shortest", "-movflags", "+faststart", str(tmp)], timeout=120)
-            if duration(tmp) < num(r["length"]) * 0.8 or not has_audio(tmp):
-                raise RuntimeError("muxed shot is too short")
-            tmp.replace(f)
-            self._set_audio([r["id"]], 1)
+            mine = _grey_frames(f)
+            for url in urls:
+                try:
+                    got = self._source_window(r, url)
+                except Exception as e:
+                    if is_network_error(e) or self.stop.is_set():
+                        raise                              # not this shot's fault: tried again after Retry
+                    got = None                             # this file cannot give these seconds: next file
+                if got is None:
+                    continue
+                wav, frames, pre = got
+                try:
+                    v = verify_alignment(mine, frames, int(round(pre * ALIGN_FPS)), exact_file=url == exact)
+                    if not v["ok"]:
+                        continue
+                    start = pre + v["offset"] / ALIGN_FPS
+                    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.4f}", "-i", str(wav),
+                         "-t", f"{num(r['length'])}", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+                         str(aud)], timeout=120)
+                finally:
+                    wav.unlink(missing_ok=True)
+                run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(f), "-i", str(aud), "-map", "0:v:0",
+                     "-map", "1:a:0", "-c", "copy", "-shortest", "-movflags", "+faststart", str(tmp)], timeout=120)
+                if abs(duration(tmp) - duration(f)) > 0.25 or not has_audio(tmp):
+                    raise RuntimeError("muxed shot does not match the original length")
+                tmp.replace(f)
+                self._set_audio([r["id"]], 1)
+                return True
+            self._set_audio([r["id"]], -1)
+            return False
         finally:
             aud.unlink(missing_ok=True)
             tmp.unlink(missing_ok=True)
+
+    def _source_window(self, r, url):
+        """The shot's seconds +-0.5 s from one source file, in ONE read: (wav, grey frames, seconds before)."""
+        st, L = num(r["src_start"]), num(r["length"])
+        pre = min(0.5, st)
+        f = Path(r["file"])
+        wav = f.with_name(f.stem + ".sound.part.wav")
+        raw = f.with_name(f.stem + ".sound.part.raw")
+        try:
+            def read():
+                run(["ffmpeg", "-y", "-loglevel", "error", *ffmpeg_net_args(url), "-ss", f"{st - pre:.4f}",
+                     "-t", f"{L + pre + 0.5:.4f}", "-i", url,
+                     "-map", "0:a:0", "-vn", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(wav),
+                     "-map", "0:v:0", "-an", "-vf", f"scale={ALIGN_W}:{ALIGN_H}:force_original_aspect_ratio=increase,"
+                     f"crop={ALIGN_W}:{ALIGN_H},fps={ALIGN_FPS},format=gray", "-f", "rawvideo", str(raw)], timeout=300)
+            with_net_retry(read, self.log, self.stop, what=f"sound {f.name}", gate=self.gate)
+            frames = np.fromfile(raw, dtype=np.uint8)
+            n = len(frames) // (ALIGN_W * ALIGN_H)
+            if n < 3 or not wav.exists():
+                wav.unlink(missing_ok=True)
+                return None
+            return wav, frames[:n * ALIGN_W * ALIGN_H].reshape(n, ALIGN_W * ALIGN_H), pre
+        finally:
+            raw.unlink(missing_ok=True)
 
     # -- learning from a finished video
     def learn_from_project(self, proj):
