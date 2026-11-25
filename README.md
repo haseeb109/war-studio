@@ -115,7 +115,7 @@ one read of the source per file tried (audio + tiny grey frames of the shot's se
 - *timing proof*: the frame-to-frame movement lines up at one shift, clearly better than every other shift, and both halves of the shot agree - the same seconds, measured to one frame (a recorded start that is a few frames off is corrected);
 - the smallest file is tried first, then the exact file the shot was cut from; a still shot (no movement to prove timing) only gets sound from that exact file;
 - no proof -> the shot stays silent (`audio = -1`). Another video, or other seconds of the same video, never give their sound.
-The picture is copied untouched. ~1-2 MB download per shot (~1-1.5 h for 5000). Sources without sound are remembered; Stop / Retry / auto-continue work as for the build. The Library stats show shots with their own sound, from silent videos, and left silent.
+The picture is copied untouched. ~1-2 MB download per shot. v0.9.7: 8 source videos at a time (`library_sound_workers`; was 4), the local "already has sound" check runs inside the workers instead of a 3-minute pass first, and the 1080p file is only opened when the small file cannot prove a shot - same checks, about twice as fast (~2-3 h for 5000 shots on 15 Mbps). Sources without sound are remembered; Stop / Retry / auto-continue work as for the build. The Library stats show shots with their own sound, from silent videos, and left silent.
 
 Your own SFX files always win over the built-in ones: put `.wav`/`.mp3` files in `assets/sfx/<category>/`. Categories: `ui_click whoosh metal_hit bass_hit riser drone_chord launch explosion flyby jet_roar rotor gunfire impact flares radar radio_static alarm`. Tuning lives in `styles/beyond_military/style.json` (`sfx`, `music`, `footage_audio`).
 

@@ -542,3 +542,21 @@ def test_add_sound_only_where_the_picture_is_proven(settings, tmp_path, monkeypa
     assert library.stats(settings)["sound"] == {"with": 4, "none": 1, "unverified": 2, "unknown": 0}
     bld.add_sound()                                                         # resumable: nothing left
     assert sorted(asked) == ["video:1", "video:2"]
+
+
+def test_full_file_is_not_touched_when_the_small_file_proves_the_shot(settings, tmp_path, monkeypatch):
+    full = _src(tmp_path / "full.mp4", 12, audio=SWITCH)
+    proxy = tmp_path / "proxy.mp4"                       # the small rendition of the same video
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(full), "-vf", "scale=160:90", "-c:v", "libx264",
+                    "-crf", "30", "-c:a", "aac", "-b:a", "64k", str(proxy)], check=True)
+    a = _old_shot(settings, "a", "video:1", 2.0, 3, full)
+    b = library.Builder({"DVIDS_API_KEY": "k"}, settings, lambda m: None)
+    monkeypatch.setattr(b, "_dvids_asset", lambda vid: ({}, [{"src": "x"}]))
+    monkeypatch.setattr(library, "pick_files", lambda fs: (str(proxy), str(full), 1080))
+    asked = []
+    real = library.has_audio
+    monkeypatch.setattr(library, "has_audio", lambda p: asked.append(str(p)) or real(p))
+    b.add_sound()
+    assert library.stats(settings)["sound"]["with"] == 1 and real(a)
+    assert str(full) not in asked                         # the big file was never opened
+    assert int(b.settings.get("library_sound_workers", 8)) == 8

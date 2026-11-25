@@ -857,11 +857,13 @@ class Builder:
         return count[0]
 
     # -- sound for shots cut before v0.9.0 (they were cut without their audio)
-    def add_sound(self, workers=4):
+    def add_sound(self, workers=None):
         """Give every DVIDS shot its own sound back: the same seconds are cut, audio only, from the smallest
-        rendition of its source video and muxed into the shot (the picture is not touched). Sources without sound
-        are remembered (audio = 0). Resumable: only shots not done yet are visited."""
+        rendition of its source video and muxed into the shot (the picture is not touched) - only when proven
+        (see _mux_sound). Sources without sound are remembered (audio = 0). Resumable: only shots not done yet
+        are visited. `library_sound_workers` source videos at a time (default 8: fast, still gentle on DVIDS)."""
         from concurrent.futures import ThreadPoolExecutor
+        workers = int(workers or self.settings.get("library_sound_workers", 8))
         with _DB_LOCK:
             con = _db(self.settings)
             rows = [dict(r) for r in con.execute(
@@ -871,22 +873,17 @@ class Builder:
         if not rows:
             self.log("sound: every shot already has its sound (or its source has none)")
             return 0
-        local = 0                                  # shots cut by v0.9.0+ already carry their sound
-        for r in rows:
-            if has_audio(r["file"]):
-                self._set_audio([r["id"]], 1)
-                local += 1
-        todo = [r for r in rows if r["source"] == "dvids" and not self._audio_known(r["id"])]
-        other = [r["id"] for r in rows if r["source"] != "dvids" and not self._audio_known(r["id"])]
+        other = [r["id"] for r in rows if r["source"] != "dvids"]
         if other:
             self._set_audio(other, 0)
         groups = {}
-        for r in todo:
-            groups.setdefault(r["src_id"], []).append(r)
-        total = len(todo)
-        self.log(f"sound: {local} shots already had sound; {total} shots from {len(groups)} DVIDS videos get theirs "
-                 f"now (audio only, from the smallest file of each video)")
-        done, silent, unver, t0 = [0], [0], [0], time.time()
+        for r in rows:
+            if r["source"] == "dvids":
+                groups.setdefault(r["src_id"], []).append(r)
+        total = sum(len(v) for v in groups.values())
+        self.log(f"sound: {total} shots from {len(groups)} DVIDS videos, {workers} videos at a time "
+                 f"(audio only, smallest file first; every shot proven frame by frame)")
+        done, silent, unver, local, t0 = [0], [0], [0], [0], time.time()
         lock = threading.Lock()
 
         def one(item):
@@ -894,37 +891,45 @@ class Builder:
             if self.stop.is_set() or not self.gate.wait():
                 return
             try:
+                todo = []
+                for r in shots:                          # cut by v0.9.0+: already carries its sound
+                    if has_audio(r["file"]):
+                        self._set_audio([r["id"]], 1)
+                        with lock:
+                            local[0] += 1
+                            done[0] += 1
+                    else:
+                        todo.append(r)
+                if not todo:
+                    return
                 _, files = self._dvids_asset(src_id)
                 proxy_url, full_url, _ = pick_files(files)
-                urls = []
-                for u in (proxy_url, full_url):          # small file first; the exact file the shot came from second
-                    if u and u not in urls and with_net_retry(lambda u=u: has_audio(u), self.log, self.stop,
-                                                              what=f"sound check {src_id}", gate=self.gate):
-                        urls.append(u)
-                if not urls:
-                    self._set_audio([r["id"] for r in shots], 0)
-                    with lock:
-                        silent[0] += len(shots)
-                        done[0] += len(shots)
-                    return
-                for r in shots:
+                urls = [u for i, u in enumerate((proxy_url, full_url)) if u and u not in (proxy_url, full_url)[:i]]
+                checked = {}
+
+                def audio_ok(u):                         # asked only when that file is really needed
+                    if u not in checked:
+                        checked[u] = with_net_retry(lambda: has_audio(u), self.log, self.stop,
+                                                    what=f"sound check {src_id}", gate=self.gate)
+                    return checked[u]
+                for r in todo:
                     if self.stop.is_set():
                         return
-                    ok = self._mux_sound(r, urls, full_url)
+                    res = self._mux_sound(r, urls, full_url, audio_ok)
                     with lock:
                         done[0] += 1
-                        if not ok:
-                            unver[0] += 1
+                        silent[0] += res == "silent"
+                        unver[0] += res == "unverified"
             except Exception as e:
                 if self.stop.is_set():
                     return
                 self.log(f"  sound {src_id}: skipped this time ({str(e)[-120:]})")
                 return
             with lock:
-                d, sl = done[0], silent[0]
+                d, sl, uv = done[0], silent[0], unver[0]
             rate = d / max(time.time() - t0, 1) * 3600
-            self.log(f"  sound: {d}/{total} shots done (~{rate:.0f}/hour), {sl} from videos without sound, "
-                     f"{unver[0]} left silent (picture did not match the source exactly)")
+            self.log(f"  sound: {d}/{total} shots done (~{rate:.0f}/hour) - {sl} from videos without sound, "
+                     f"{uv} kept silent (no proof the sound fits)")
             self.status(shots=d, target=total, progress=min(1.0, d / max(total, 1)))
 
         with ThreadPoolExecutor(workers) as ex:
@@ -956,17 +961,22 @@ class Builder:
             con.commit()
             con.close()
 
-    def _mux_sound(self, r, urls, exact=None):
+    def _mux_sound(self, r, urls, exact=None, audio_ok=None):
         """Add the shot's own sound - only when it is PROVEN to belong to this picture (verify_alignment: same
         video AND same seconds to one frame; still shots only from the exact file they were cut from). One read
         of the source per file tried (audio + tiny grey frames of the same seconds +-0.5 s). No proof in any file
-        -> the shot stays silent (audio = -1). Returns True when sound was added."""
+        -> the shot stays silent (audio = -1); no file with sound -> audio = 0.
+        Returns "ok", "unverified" or "silent"."""
         f = Path(r["file"])
         tmp = f.with_name(f.stem + ".sound.part.mp4")
         aud = f.with_name(f.stem + ".sound.part.m4a")
         try:
             mine = _grey_frames(f)
+            any_sound = False
             for url in urls:
+                if audio_ok is not None and not audio_ok(url):
+                    continue                               # this file has no sound track: next file
+                any_sound = True
                 try:
                     got = self._source_window(r, url)
                 except Exception as e:
@@ -992,9 +1002,9 @@ class Builder:
                     raise RuntimeError("muxed shot does not match the original length")
                 tmp.replace(f)
                 self._set_audio([r["id"]], 1)
-                return True
-            self._set_audio([r["id"]], -1)
-            return False
+                return "ok"
+            self._set_audio([r["id"]], -1 if any_sound else 0)
+            return "unverified" if any_sound else "silent"
         finally:
             aud.unlink(missing_ok=True)
             tmp.unlink(missing_ok=True)
