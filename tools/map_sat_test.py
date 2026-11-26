@@ -85,10 +85,11 @@ def preview(token):
     for n, th in STYLES.items():
         render(n, th, token, page_only=True)
     h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(base))
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8766), h)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)      # any free port
+    port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     for n in STYLES:
-        webbrowser.open(f"http://127.0.0.1:8766/{n}/index.html?play")
+        webbrowser.open(f"http://127.0.0.1:{port}/{n}/index.html?play&v={int(time.time())}")
     print("4 tabs opened in your browser (order: " + ", ".join(STYLES) + "). Press Ctrl+C here when done.")
     try:
         threading.Event().wait()
