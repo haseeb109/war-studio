@@ -29,22 +29,21 @@ PLAN = {
 }
 BASE = {"font": "\"Helvetica Neue\",Arial,sans-serif", "satellite": True, "hl": "#ffffff", "border": "#ffffff"}
 STYLES = {
-    # 1: Tactical satellite - dark, cool, low colour; the locked yellow/red overlays on top
-    "tactical": dict(BASE, sat={"raster-saturation": -0.55, "raster-brightness-max": 0.62, "raster-contrast": 0.15},
-                     land_opacity=0, hl_opacity=0.30, arrow="#ff3b30", ring="#FFC400", accent="#FFC400",
-                     label="#ffffff", border="#cfd8e3", tint="rgba(8,19,33,.25)", vignette=0.55),
-    # 2: Natural - Google-Earth-like real colours, clean white labels
-    "natural": dict(BASE, sat={"raster-saturation": 0.05, "raster-contrast": 0.05}, land_opacity=0, hl_opacity=0.22,
-                    arrow="#ff2d2d", ring="#ffffff", accent="#ffffff", label="#ffffff", border="#ffffff", vignette=0.35),
-    # 3: Night ops - almost black and white, green tint, grid + scanlines
-    "nightops": dict(BASE, sat={"raster-saturation": -1, "raster-brightness-max": 0.55, "raster-contrast": 0.3},
-                     land_opacity=0, hl_opacity=0.28, arrow="#ff3b30", ring="#39ff88", accent="#39ff88",
-                     label="#d8ffe6", border="#39ff88", tint="rgba(0,60,25,.30)", grid="rgba(57,255,136,.10)",
-                     scan=True, vignette=0.6),
-    # 4: Hybrid - real colours but darker, strong enemy/ally fills (newsroom look)
-    "hybrid": dict(BASE, sat={"raster-saturation": -0.2, "raster-brightness-max": 0.75}, land_opacity=0, hl_opacity=0.45,
-                   arrow="#ff3b30", ring="#FFC400", accent="#FFC400", label="#ffffff", border="#ffffff",
-                   tint="rgba(0,0,0,.15)", vignette=0.45),
+    # 1: Real - satellite as it is (Google Earth look), thin white borders, small clean labels
+    "real": dict(BASE, sat={"raster-contrast": 0.05}, land_opacity=0, hl_opacity=0.0, border="rgba(255,255,255,.55)",
+                 arrow="#ff3b30", ring="#ffffff", accent="#ffffff", label="#ffffff", vignette=0.25, grain=0.06),
+    # 2: Real graded - same imagery, colour-graded like the archive footage (a bit warm, soft contrast, film grain)
+    "graded": dict(BASE, sat={"raster-saturation": -0.25, "raster-contrast": -0.05, "raster-brightness-max": 0.88},
+                   land_opacity=0, hl_opacity=0.18, arrow="#ff3b30", ring="#FFC400", accent="#FFC400", label="#ffffff",
+                   border="rgba(255,255,255,.6)", tint="rgba(40,30,10,.10)", vignette=0.4, grain=0.10),
+    # 3: Real 3D - graded imagery and the camera tilts down while it dives in (drone / Google Earth fly-in)
+    "real3d": dict(BASE, sat={"raster-saturation": -0.2, "raster-brightness-max": 0.9}, land_opacity=0, hl_opacity=0.15,
+                   arrow="#ff3b30", ring="#FFC400", accent="#FFC400", label="#ffffff", border="rgba(255,255,255,.6)",
+                   vignette=0.4, grain=0.08, pitch=True),
+    # 4: Real + enemy/ally tint - real imagery, the sides shown with a soft colour wash
+    "sides": dict(BASE, sat={"raster-saturation": -0.15, "raster-brightness-max": 0.85}, land_opacity=0, hl_opacity=0.32,
+                  arrow="#ff3b30", ring="#FFC400", accent="#FFC400", label="#ffffff", border="#ffffff",
+                  vignette=0.4, grain=0.08),
 }
 
 
@@ -56,6 +55,9 @@ def render(name, theme, token):
         shutil.copy(MAPS / f, work / f)
     shutil.copy(HF / "gsap.min.js", work / "gsap.min.js")
     plan = dict(PLAN, theme=theme, token=token)
+    if theme.get("pitch"):
+        plan["from"] = dict(PLAN["from"], pitch=0, bearing=0)
+        plan["to"] = dict(PLAN["to"], pitch=55, bearing=-20)
     page = (MAPS / "map_template.html").read_text().replace("__DUR__", f"{PLAN['duration']:.3f}") \
         .replace("__PLAN__", json.dumps(plan))
     (work / "index.html").write_text(page)

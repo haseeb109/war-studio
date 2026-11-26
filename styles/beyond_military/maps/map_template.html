@@ -30,11 +30,11 @@ const P = __PLAN__;                       // {duration, title, from:{center,zoom
 const D = P.duration;
 const TH = Object.assign({sea: "#081321", land: "#1b2430", border: "#4b5a6b", hl: "#ffffff", arrow: "#ff3b30", ring: "#FFC400",
   label: "#fff", accent: "#FFC400", font: '"Helvetica Neue",Arial,sans-serif', grid: "", scan: false, sweep: false,
-  satellite: false, sat: {}, land_opacity: 1, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
+  satellite: false, sat: {}, grain: 0, land_opacity: 1, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
 document.documentElement.style.setProperty("--acc", TH.accent);
 const map = new maplibregl.Map({
   container: "map", interactive: false, attributionControl: false, fadeDuration: 0,
-  preserveDrawingBuffer: true, maxTileCacheSize: 6000, center: P.from.center, zoom: P.from.zoom,
+  preserveDrawingBuffer: true, maxTileCacheSize: 6000, maxPitch: 70, center: P.from.center, zoom: P.from.zoom,
   style: {version: 8, sources: {}, layers: [{id: "sea", type: "background", paint: {"background-color": TH.sea}}]}
 });
 const HL = {};
@@ -51,7 +51,9 @@ const state = {t: 0};
 function draw() {
   const k = Math.min(1, state.t / Math.max(0.1, D * 0.85)), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
   map.jumpTo({center: [P.from.center[0] + (P.to.center[0] - P.from.center[0]) * e, P.from.center[1] + (P.to.center[1] - P.from.center[1]) * e],
-              zoom: P.from.zoom + (P.to.zoom - P.from.zoom) * e});
+              zoom: P.from.zoom + (P.to.zoom - P.from.zoom) * e,
+              pitch: (P.from.pitch || 0) + ((P.to.pitch || 0) - (P.from.pitch || 0)) * e,
+              bearing: (P.from.bearing || 0) + ((P.to.bearing || 0) - (P.from.bearing || 0)) * e});
   map.redraw();                           // synchronous: this frame is complete before HyperFrames takes it
   const fx = document.getElementById("fx");
   let svg = `<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="${TH.arrow}"/></marker></defs>`;
@@ -77,6 +79,7 @@ function draw() {
     const R = Math.hypot(e2.x - c.x, e2.y - c.y), a = state.t * 2.2;
     svg += `<line x1="${c.x}" y1="${c.y}" x2="${c.x + R * Math.cos(a)}" y2="${c.y + R * Math.sin(a)}" stroke="${TH.ring}" stroke-width="4" opacity=".9"/>`;
     [0.33, 0.66].forEach(f => svg += `<circle cx="${c.x}" cy="${c.y}" r="${R * f}" fill="none" stroke="${TH.ring}" stroke-width="1.5" opacity=".5"/>`); }
+  if (TH.grain) svg += `<filter id="gr"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="${Math.floor(state.t * 30)}"/><feColorMatrix type="saturate" values="0"/></filter><rect width="1920" height="1080" filter="url(#gr)" opacity="${TH.grain}" style="mix-blend-mode:overlay"/>`;
   if (TH.scan) svg += `<rect width="1920" height="1080" fill="url(#scan)"/><defs><pattern id="scan" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="2" fill="rgba(0,0,0,.18)"/></pattern></defs>`;
   fx.innerHTML = svg;
   let lab = "";
