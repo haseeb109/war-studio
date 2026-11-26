@@ -321,3 +321,20 @@ def test_clip_audio_only_no_sfx_no_music_clip_sound_slightly_lower(tmp_path):
     ratio = 20 * np.log10(rms(mid) / rms(src))
     assert -6 < ratio < -2                     # its own sound, ~4 dB lower, not normalised or ducked away
     assert rms(y[int(3.3 * sr):]) < 1e-4       # nothing after the clip: no music bed, no sfx
+
+
+def test_three_sounds_music_loops_to_the_end(tmp_path):
+    import numpy as np
+    sr = sfx.SR
+    sfx.write_wav(tmp_path / "vo.wav", np.zeros(sr * 10, dtype=np.float32))
+    t = np.arange(int(sr * 2.5)) / sr
+    sfx.write_wav(tmp_path / "m.wav", (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))
+    out = tmp_path / "o.wav"
+    st = dict(LIVE, sound_mode="three_sounds")
+    sfx.mix(tmp_path / "vo.wav", [{"cat": "explosion", "t": 1, "gain_db": 0}], 10.0, st, out, music_file=str(tmp_path / "m.wav"))
+    y = sfx.load_audio(out)
+    rms = lambda a: float(np.sqrt(np.mean(a.astype(np.float64) ** 2)))
+    assert rms(y[int(6 * sr):int(6.5 * sr)]) > 1e-3          # 6 s in: the 2.5 s track has started again (looped)
+    assert rms(y[int(1 * sr):int(1.5 * sr)]) < 0.2           # no explosion sfx on top
+    sfx.mix(tmp_path / "vo.wav", [], 10.0, st, tmp_path / "n.wav", music_file="")
+    assert rms(sfx.load_audio(tmp_path / "n.wav")) < 1e-4    # no music chosen: nothing generated

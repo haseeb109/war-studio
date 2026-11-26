@@ -43,8 +43,9 @@
     "units": "imperial_plus_metric"
   },
 
-  "sound_mode": "clip_audio_only",
-  "_sound_mode_note": "LOCKED by the user (v1.2): no sound effects and no music; voice + each clip's own sound only. Set to \"designed\" to bring back the v0.9 sound design.",
+  "sound_mode": "three_sounds",
+  "bgm": {"_note": "the music file chosen per video (assets/music), looped to the end; level_db = loudness it is set to, then gap_db in pauses / under_voice_db under the voice", "level_db": -20, "gap_db": -4, "under_voice_db": -12, "fade_in_seconds": 1.0, "end_fade_seconds": 3.0},
+  "_sound_mode_note": "three_sounds (user, v1.5): ONLY voice + each clip's own audio + the chosen music on loop. LOCKED by the user (v1.2): no sound effects and no music; voice + each clip's own sound only. Set to \"designed\" to bring back the v0.9 sound design.",
   "sfx": {
     "_note": "Sound design v2 (Beyond Military analysis): SFX follow what is ON SCREEN (the chosen shot's action), a UI blip on every on-screen label/time/number, whoosh + bass hit on maps, cut accents on most cuts in the hook and on scene changes after it, radio static on comms words, radar beep on lock/warning words, riser into attack/reveal moments, sustained chord on cliffhangers. Number/explanation beats stay quiet. Old keyword / pivot-word / music-dropout rules are gone.",
     "gains_db": {"ui_click": -18, "whoosh": -14, "metal_hit": -15, "bass_hit": -9, "riser": -13, "drone_chord": -14, "launch": -7, "explosion": -5, "flyby": -10, "jet_roar": -11, "rotor": -12, "gunfire": -8, "impact": -8, "flares": -12, "radar": -16, "radio_static": -18, "alarm": -14},

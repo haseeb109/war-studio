@@ -628,7 +628,11 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
 
     _mix_footage(out, footage or [], talk, style.get("footage_audio", {}), log)
     if clip_audio_only(style):
-        log("sound: clip audio only - no sound effects, no music")
+        if music_file and Path(music_file).is_file():
+            mix_bgm(out, n, talk, music_file, style.get("bgm", {}), log)
+            log("sound: voice + clip audio + music - no sound effects")
+        else:
+            log("sound: voice + clip audio - no music chosen, no sound effects")
     else:
         _mix_music(out, n, float(total), events or [], levels, talk, style.get("music", {}), music_file, seed, log)
 
@@ -640,8 +644,36 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
 
 
 def clip_audio_only(style):
-    """Sound mode chosen by the user: voice + every clip's own sound, nothing generated."""
-    return str((style or {}).get("sound_mode", "")).lower() == "clip_audio_only"
+    """Sound mode chosen by the user: voice + every clip's own sound (+ the chosen music on loop), nothing generated."""
+    return str((style or {}).get("sound_mode", "")).lower() in ("clip_audio_only", "three_sounds")
+
+
+def mix_bgm(out, n, talk, path, mc, log):
+    """The one music file chosen for this video, looped start-to-end until the video ends, under the voice."""
+    try:
+        a = load_audio(path)
+    except Exception as e:
+        log(f"music: could not read {Path(path).name} ({str(e)[:80]})")
+        return
+    if len(a) < SR:
+        log(f"music: {Path(path).name} is too short")
+        return
+    f = min(int(0.03 * SR), len(a) // 4)               # 30 ms fade at each end of the track: no click when it restarts
+    a = a.astype(np.float32).copy()
+    a[:f] *= np.linspace(0, 1, f, dtype=np.float32)
+    a[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
+    k = -(-n // len(a))
+    loop = np.tile(a, k)[:n]
+    rms = float(np.sqrt(np.mean(a.astype(np.float64) ** 2))) or 1e-6
+    loop *= db(float(mc.get("level_db", -20))) / rms             # every track lands at the same loudness
+    hop = SR // CTRL
+    idx = np.arange(n)
+    g = _duck(talk, idx, float(mc.get("gap_db", -4)), float(mc.get("under_voice_db", -12)))
+    t = idx / SR
+    g = g * np.clip(t / max(float(mc.get("fade_in_seconds", 1.0)), 0.01), 0, 1)
+    g = g * np.clip((n / SR - t) / max(float(mc.get("end_fade_seconds", 3.0)), 0.01), 0, 1)
+    out += (loop * g).astype(np.float32)
+    log(f"music: {Path(path).name} looped {k}x under the voice")
 
 
 def _duck(talk, idx, gap_db, under_db):

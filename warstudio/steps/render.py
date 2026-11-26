@@ -151,7 +151,7 @@ def run_step(proj, settings, style, log, use_hf=True):
     video = proj / "video_only.mp4"
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(video)])
 
-    log("mixing audio (voice + clip sound)" if sfx.clip_audio_only(style) else "mixing audio (voice + SFX + footage sound + music)")
+    log("mixing audio (voice + clip sound + chosen music)" if sfx.clip_audio_only(style) else "mixing audio (voice + SFX + footage sound + music)")
     sfx.ensure_defaults()
     picks = read_json(proj / "picks.json", {}) or {}
     events = read_json(proj / "sfx_events.json")
@@ -173,7 +173,9 @@ def run_step(proj, settings, style, log, use_hf=True):
     footage = sfx.plan_footage_audio(beats, specs, picks, fetched, style, total, settings)
     write_json(proj / "sound_plan.json", {"music_levels": levels, "footage_audio": footage})
     mixwav = proj / "mix.wav"
-    sfx.mix(proj / "vo.wav", events, total, style, mixwav, settings.get("music_file", ""),
+    bgm = (read_json(proj / "project.json", {}) or {}).get("bgm") or ""
+    music = str(sfx.MUSIC_DIR / bgm) if bgm and sfx.clip_audio_only(style) else settings.get("music_file", "")
+    sfx.mix(proj / "vo.wav", events, total, style, mixwav, music,
             levels=levels, footage=footage, seed=proj.name, log=log)
 
     final = proj / "final.mp4"

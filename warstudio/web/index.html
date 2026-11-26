@@ -161,6 +161,10 @@
         </div>
         <div style="flex:0 0 auto"><button class="btn ghost" id="prevBtn">&#9654; Preview voice</button></div>
         <div>
+          <label>Background music <a href="#" id="musicOpen" class="muted" style="font-weight:400">open folder</a></label>
+          <select id="musicSel"><option value="">No music</option></select>
+        </div>
+        <div>
           <label>Style / template</label>
           <select id="styleSel"></select>
         </div>
@@ -484,7 +488,7 @@ $("#startBtn").onclick = async () => {
     const sources = [...document.querySelectorAll(".srcChk:checked")].map(x => x.value);
     if (!sources.length) { toast("Pick at least one footage source"); return; }
     $("#startBtn").disabled = true;
-    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources});
+    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources, bgm: $("#musicSel").value});
     $("#startMsg").textContent = "Queued: " + d.id;
     document.querySelector('nav button[data-tab="jobs"]').click(); await loadJobs(); openJob(d.id);
   } catch (e) { toast(e.message, 6000); } finally { $("#startBtn").disabled = false; }
@@ -963,6 +967,17 @@ $("#rvApply").onclick = async () => {
   setTimeout(poll, 800);
 };
 
+async function loadMusic() {
+  try {
+    const d = await api("/api/music"), keep = $("#musicSel").value;
+    $("#musicSel").innerHTML = `<option value="">No music</option>` + d.files.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+    if (d.files.includes(keep)) $("#musicSel").value = keep;
+    $("#musicSel").title = d.files.length ? d.folder : "Put .mp3/.wav files into " + d.folder;
+  } catch (e) {}
+}
+$("#musicSel").onfocus = loadMusic;
+$("#musicOpen").onclick = async ev => { ev.preventDefault(); const d = await api("/api/music/open", {}); toast("Music folder: " + d.folder, 6000); loadMusic(); };
+loadMusic();
 function bindMapSample() {
   document.querySelectorAll("[data-mapsample]").forEach(b => b.onclick = async () => {
     let box = $("#mapSampleBox");

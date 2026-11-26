@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from . import ROOT, VERSION, ai33, edits
-from .config import (DATA_DIR, FAVORITES_FILE, PROJECTS_DIR, KEY_NAMES, list_styles, load_keys, load_settings,
+from .config import (MUSIC_DIR, DATA_DIR, FAVORITES_FILE, PROJECTS_DIR, KEY_NAMES, list_styles, load_keys, load_settings,
                      masked_keys, save_keys, save_settings)
 from .pipeline import create_project, run_project, STEPS
 from .util import read_json, write_json, download
@@ -196,6 +196,7 @@ class NewJob(BaseModel):
     style: str = "beyond_military"
     dummy: bool = False
     sources: list[str] = []          # footage sources for this video only; empty = all available
+    bgm: str = ""                    # file name in assets/music; "" = no music
 
 
 class Resume(BaseModel):
@@ -273,6 +274,26 @@ def map_sample_file():
     if not p.exists():
         raise HTTPException(404, "no test map yet")
     return FileResponse(p, media_type="video/mp4")
+
+
+@app.get("/api/music")
+def music_list():
+    """Background music files the user put into assets/music (one is chosen per video)."""
+    from .sfx import AUDIO_EXT
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(p.name for p in MUSIC_DIR.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT)
+    return {"folder": str(MUSIC_DIR), "files": files}
+
+
+@app.post("/api/music/open")
+def music_open():
+    """Open the music folder in Finder."""
+    import subprocess
+    import sys
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(MUSIC_DIR)])
+    return {"ok": True, "folder": str(MUSIC_DIR)}
 
 
 @app.post("/api/settings")
@@ -356,7 +377,9 @@ def new_job(j: NewJob):
         keys, settings = load_keys(), dict(load_settings(), **{f"use_{s}": True for s in online})
         if not any(source_ready(s, keys, settings) for s in online):
             raise HTTPException(400, "none of the selected footage sources has an API key — add it in Settings")
-    proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources)
+    if j.bgm and not (MUSIC_DIR / Path(j.bgm).name).is_file():
+        raise HTTPException(400, f"music file not found in assets/music: {j.bgm}")
+    proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources, Path(j.bgm).name if j.bgm else "")
     JOBS.put((proj, None))
     return {"id": proj.name}
 
