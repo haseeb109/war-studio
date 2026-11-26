@@ -99,6 +99,7 @@
     "locked": true,
     "theme": {"sea": "#081321", "land": "#1b2430", "border": "#4b5a6b", "hl": "#ffffff", "arrow": "#ff3b30", "ring": "#FFC400",
               "label": "#ffffff", "accent": "#FFC400", "font": "\"Helvetica Neue\",Arial,sans-serif", "grid": "", "scan": false, "sweep": false},
+    "satellite_theme": {"_note": "TEST (not locked): real Esri/Mapbox satellite, graded like archive footage, 3D fly-in. Used when a satellite key is set and map_satellite is on.", "satellite": true, "sat": {"raster-saturation": -0.2, "raster-brightness-max": 0.9}, "land_opacity": 0, "hl_opacity": 0.18, "arrow": "#ff3b30", "ring": "#FFC400", "accent": "#FFC400", "label": "#ffffff", "border": "rgba(255,255,255,.6)", "hl": "#ffffff", "font": "\"Helvetica Neue\",Arial,sans-serif", "vignette": 0.4, "grain": 0.08, "pitch": true, "pitch_deg": 55},
     "highlight_colors": {"enemy": "#b3261e", "ally": "#3a5a80", "neutral": "#4b5a6b"}
   },
   "audio": {"target_lufs": -14, "vo_gain_db": 0}

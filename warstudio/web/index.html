@@ -401,7 +401,7 @@ async function loadStatus() {
   const brainKeys = ["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"];
   const keyRow = k => `<div class="keyrow"><div class="lab"><b>${k}</b><span>${KEYINFO[k] || ""}</span></div>
       <input type="password" data-key="${k}" placeholder="${STATUS.keys[k] ? "current: " + STATUS.keys[k] : "not set — paste key"}">
-      <button class="btn ghost" data-test="${k}">Test</button><div class="keyres" id="res_${k}"></div></div>`;
+      <button class="btn ghost" data-test="${k}">Test</button>${k === "ARCGIS_API_KEY" || k === "MAPBOX_TOKEN" ? `<button class="btn ghost" data-mapsample="1">Render test map</button>` : ""}<div class="keyres" id="res_${k}"></div></div>`;
   $("#keyFields").innerHTML = STATUS.key_names.filter(k => !brainKeys.includes(k)).map(keyRow).join("");
   const S = STATUS.settings;
   $("#brainProv").innerHTML = Object.entries(STATUS.brain_presets).map(([k, v]) => `<option value="${k}" ${k === S.brain_provider ? "selected" : ""}>${v}</option>`).join("");
@@ -964,7 +964,22 @@ $("#rvApply").onclick = async () => {
   setTimeout(poll, 800);
 };
 
+function bindMapSample() {
+  document.querySelectorAll("[data-mapsample]").forEach(b => b.onclick = async () => {
+    let box = $("#mapSampleBox");
+    if (!box) { box = document.createElement("div"); box.id = "mapSampleBox"; box.style.cssText = "margin:12px 0";
+      b.closest(".keyrow").after(box); }
+    b.disabled = true; box.innerHTML = '<span class="muted">Rendering a 6 s test map (about 1-2 minutes)…</span>';
+    try {
+      const r = await api("/api/maps/sample", {});
+      box.innerHTML = `<div class="muted" style="margin-bottom:6px">Map look: ${esc(r.look)}</div>
+        <video src="${r.url}" controls autoplay loop muted style="width:100%;max-width:960px;border-radius:10px"></video>`;
+    } catch (e) { box.innerHTML = `<span style="color:var(--red)">✗ ${esc(e.message)}</span>`; }
+    finally { b.disabled = false; }
+  });
+}
 function bindTests() {
+  bindMapSample();
   document.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => {
     const k = b.dataset.test, inp = document.querySelector(`input[data-key="${k}"]`), out = $("#res_" + k);
     b.disabled = true; out.innerHTML = '<span class="muted">Testing…</span>';

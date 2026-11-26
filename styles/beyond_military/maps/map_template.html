@@ -107,7 +107,7 @@ Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.
     if (TH.satellite && P.token) {          // real satellite imagery (Esri World Imagery or Mapbox), graded by the theme
       const esri = P.provider === "esri";
       map.addSource("sat", {type: "raster", tileSize: esri ? (P.tile_size || 512) : 512, maxzoom: 19,
-        tiles: [esri ? "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/imagery/static/tile/{z}/{y}/{x}?token=" + P.token
+        tiles: [esri ? (P.tile_url || "https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=") + P.token
                      : "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=" + P.token]});
       const S = Object.assign({"raster-saturation": 0, "raster-contrast": 0, "raster-brightness-max": 1, "raster-brightness-min": 0,
                                "raster-hue-rotate": 0}, TH.sat || {});

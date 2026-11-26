@@ -253,6 +253,28 @@ def test_key(t: TestReq):
     return {"ok": ok, "message": msg}
 
 
+@app.post("/api/maps/sample")
+def map_sample():
+    """Settings > Render test map: 6 s clip with the current map look (satellite if a key is set)."""
+    from . import maps
+    from .config import load_style
+    out = DATA_DIR / "map_sample.mp4"
+    out.unlink(missing_ok=True)
+    try:
+        look = maps.render_sample(load_style("beyond_military"), load_settings(), load_keys(), out)
+    except Exception as e:
+        raise HTTPException(500, f"map test failed: {str(e)[:300]}")
+    return {"ok": True, "look": look, "url": f"/api/maps/sample.mp4?t={int(time.time())}"}
+
+
+@app.get("/api/maps/sample.mp4")
+def map_sample_file():
+    p = DATA_DIR / "map_sample.mp4"
+    if not p.exists():
+        raise HTTPException(404, "no test map yet")
+    return FileResponse(p, media_type="video/mp4")
+
+
 @app.post("/api/settings")
 def set_settings(s: Settings):
     return {"ok": True, "settings": save_settings(s.settings)}

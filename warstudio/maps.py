@@ -25,6 +25,51 @@ CHUNK = 8                   # runs per brain call (short replies come back compl
 MAX_RUN = 15.0              # seconds: a longer run of map beats is split (one camera move stays readable)
 PAD = 1.0
 SIDES = ("enemy", "ally", "neutral")
+# Esri World Imagery tile addresses (key appended); the Test button saves the one that works as arcgis_tile_url
+ARCGIS_URLS = [
+    "https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=",
+    "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/imagery/static/tile/{z}/{y}/{x}?token=",
+]
+
+
+def map_look(style, settings, keys):
+    """-> (theme, extra plan fields). Satellite when switched on and a key is set, else the locked Tactical dark."""
+    mp = style.get("maps", {})
+    if str(settings.get("map_satellite", True)).lower() not in ("false", "0", "no", "off"):
+        if keys.get("ARCGIS_API_KEY"):
+            url = settings.get("arcgis_tile_url") or ARCGIS_URLS[0]
+            return mp.get("satellite_theme") or mp.get("theme") or {}, {
+                "provider": "esri", "token": keys["ARCGIS_API_KEY"], "tile_url": url, "tile_size": 256}
+        if keys.get("MAPBOX_TOKEN"):
+            return mp.get("satellite_theme") or mp.get("theme") or {}, {"provider": "mapbox", "token": keys["MAPBOX_TOKEN"]}
+    return mp.get("theme") or {}, {}
+
+
+def tilt(plan, theme):
+    """3D fly-in: the camera tilts down while it dives in (only for themes that ask for it)."""
+    if theme.get("pitch"):
+        plan = dict(plan, to=dict(plan["to"], pitch=float(theme.get("pitch_deg", 55)), bearing=-15))
+    return plan
+
+
+SAMPLE = {"title": "RED SEA", "from": {"center": [44.0, 17.0], "zoom": 3.2}, "to": {"center": [42.96, 14.80], "zoom": 9.2},
+          "highlight": [{"iso": "YEM", "color": "#b3261e"}, {"iso": "ERI", "color": "#3a5a80"}],
+          "countries": [{"name": "YEMEN", "at": [44.2, 15.3]}, {"name": "ERITREA", "at": [39.0, 15.2]}],
+          "points": [{"name": "Hodeidah", "lon": 42.95, "lat": 14.80}],
+          "arrows": [{"from": [42.95, 14.80], "to": [42.55, 14.55]}], "rings": [{"lon": 42.95, "lat": 14.80, "km": 25}]}
+
+
+def render_sample(style, settings, keys, out):
+    """Settings > Render test map: a 6 s Red Sea clip with the current map look."""
+    if not hf_cmd():
+        raise RuntimeError("HyperFrames/npx not found")
+    theme, extra = map_look(style, settings, keys)
+    plan = tilt(dict(SAMPLE, **extra), theme)
+    work = build_page(plan, 6.0, Path(out).parent / "map_sample_work", theme)
+    render_one(work, out, style["canvas"]["fps"], timeout=600)
+    shutil.rmtree(work, ignore_errors=True)
+    return "satellite (" + extra["provider"] + ")" if extra else "tactical dark (no satellite key)"
+
 
 PROMPT = """You plan animated military news maps (dark tactical style). For every RUN below, read the narration and
 return where the camera looks and what is drawn. Use real geography. Coordinates are [longitude, latitude].
@@ -206,7 +251,7 @@ def build_page(plan, dur, work, theme):
     for f in ("maplibre-gl.js", "maplibre-gl.css", "countries.geojson"):
         shutil.copy(MAPS_DIR / f, work / f)
     shutil.copy(HF_DIR / "gsap.min.js", work / "gsap.min.js")
-    P = dict(plan, duration=round(dur, 3), theme=theme)
+    P = dict(plan, duration=round(dur, 3), theme=theme)       # plan may carry provider/token/tile_url
     page = (MAPS_DIR / "map_template.html").read_text().replace("__DUR__", f"{dur:.3f}").replace("__PLAN__", json.dumps(P))
     (work / "index.html").write_text(page)
     return work
@@ -258,7 +303,9 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
                 costs.add(proj, "brain", usd=usd, maps=len(got))
             except Exception:
                 pass
-    theme = style.get("maps", {}).get("theme") or {}
+    theme, extra = map_look(style, settings, keys)
+    if extra:
+        log(f"maps: satellite imagery ({extra['provider']})")
     fps = style["canvas"]["fps"]
     jobs = [(i, runs[i], plans[i]) for i in sorted(plans)]
     if not jobs:
@@ -275,7 +322,7 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
         clip = mdir / f"run_{r['beats'][0]}_{len(r['beats'])}.mp4"
         try:
             if not clip.exists():
-                render_one(build_page(plan, dur, mdir / f"work_{i}", theme), clip, fps)
+                render_one(build_page(tilt(dict(plan, **extra), theme), dur, mdir / f"work_{i}", theme), clip, fps)
                 shutil.rmtree(mdir / f"work_{i}", ignore_errors=True)
             got = {}
             bstart = {str(b["id"]): b for b in beats}
