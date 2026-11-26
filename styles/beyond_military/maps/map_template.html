@@ -30,12 +30,11 @@ const P = __PLAN__;                       // {duration, title, from:{center,zoom
 const D = P.duration;
 const TH = Object.assign({sea: "#081321", land: "#1b2430", border: "#4b5a6b", hl: "#ffffff", arrow: "#ff3b30", ring: "#FFC400",
   label: "#fff", accent: "#FFC400", font: '"Helvetica Neue",Arial,sans-serif', grid: "", scan: false, sweep: false,
-  satellite: false, sat: {}, grain: 0, land_opacity: 1, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
+  grain: 0, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
 document.documentElement.style.setProperty("--acc", TH.accent);
-try { maplibregl.setMaxParallelImageRequests(4); } catch (e) {}   // Mapbox answers 429 to bursts
 const map = new maplibregl.Map({
   container: "map", interactive: false, attributionControl: false, fadeDuration: 0,
-  preserveDrawingBuffer: true, maxTileCacheSize: 6000, maxPitch: 70, center: P.from.center, zoom: P.from.zoom,
+  preserveDrawingBuffer: true, maxPitch: 70, center: P.from.center, zoom: P.from.zoom,
   style: {version: 8, sources: {}, layers: [{id: "sea", type: "background", paint: {"background-color": TH.sea}}]}
 });
 const HL = {};
@@ -92,50 +91,26 @@ function draw() {
   const cz = Math.min(1, Math.max(0, (map.getZoom() - (P.label_zoom || 4.2)) / 0.6));     // names only once there is room
   (P.countries || []).forEach(c => { const q = map.project(c.at); lab += `<div class="lbl" style="left:${q.x}px;top:${q.y}px;color:${TH.label};font-family:${TH.font};opacity:${cz}">${c.name}</div>`; });
   if (P.title) lab += `<div class="title" style="opacity:${Math.min(1, state.t / 0.3)}"><div class="bar"></div><div class="txt">${P.title}</div></div>`;
-  if (TH.satellite && P.token) lab += `<div style="position:absolute;right:18px;bottom:12px;font:500 15px ${TH.font};color:rgba(255,255,255,.75)">${P.provider === "esri" ? "Esri, Maxar, Earthstar Geographics" : "© Mapbox © OpenStreetMap"}</div>`;
   document.getElementById("labels").innerHTML = lab;
 }
 const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res));
 Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.fonts ? document.fonts.ready : 0]).then(([geo]) => {
   {
     if (!Object.keys(HL).length) HL["___"] = TH.land;      // a match expression needs at least one pair
-    if (location.search.includes("play")) {   // preview only: say plainly when the satellite tiles do not load
-      const warn = m => { let d = document.getElementById("satwarn"); if (!d) { d = document.createElement("div"); d.id = "satwarn";
-        d.style.cssText = "position:absolute;left:0;right:0;top:0;padding:14px;background:#b3261e;color:#fff;font:600 26px Arial;z-index:99"; document.body.appendChild(d); } d.textContent = m; };
-      if (TH.satellite && !P.token) warn("NO MAPBOX TOKEN - satellite is off");
-      map.on("error", e => warn("SATELLITE NOT LOADING: " + ((e.error && (e.error.status || e.error.message)) || "error")));
-    }
-    if (TH.satellite && P.token) {          // real satellite imagery (Esri World Imagery or Mapbox), graded by the theme
-      const esri = P.provider === "esri";
-      map.addSource("sat", {type: "raster", tileSize: esri ? (P.tile_size || 512) : 512, maxzoom: 19,
-        tiles: [esri ? (P.tile_url || "https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=") + P.token
-                     : "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=" + P.token]});
-      const S = Object.assign({"raster-saturation": 0, "raster-contrast": 0, "raster-brightness-max": 1, "raster-brightness-min": 0,
-                               "raster-hue-rotate": 0}, TH.sat || {});
-      map.addLayer({id: "sat", type: "raster", source: "sat", paint: Object.assign({"raster-fade-duration": 0}, S)});
-    }
     map.addSource("c", {type: "geojson", data: geo});
     map.addLayer({id: "land", type: "fill", source: "c", paint: {"fill-color": ["match", ["get", "iso"], ...Object.entries(HL).flat(), TH.land],
-                                                                  "fill-opacity": ["match", ["get", "iso"], ...Object.keys(HL).flatMap(k => [k, TH.hl_opacity]), TH.satellite && P.token ? TH.land_opacity : 1]}});
+                                                                  "fill-opacity": ["match", ["get", "iso"], ...Object.keys(HL).flatMap(k => [k, TH.hl_opacity]), 1]}});
     map.addLayer({id: "border", type: "line", source: "c", paint: {"line-color": TH.border, "line-width": 1.2}});
     map.addLayer({id: "hl", type: "line", source: "c", filter: ["in", ["get", "iso"], ["literal", Object.keys(HL)]],
                   paint: {"line-color": TH.hl, "line-width": 3}});
-    const idle = (ms) => new Promise(res => { let done = false; const f = () => { if (!done) { done = true; res(); } };
-      map.once("idle", f); setTimeout(f, ms); map.triggerRepaint(); });
-    async function warm() {                 // satellite: fly the whole camera path once so every tile is cached
-      if (!(TH.satellite && P.token)) return;
-      for (let i = 0; i <= 12; i++) { state.t = D * i / 12; draw(); await idle(5000); }
-      state.t = 0; draw(); await idle(4000);
-    }
-    warm().then(function ready() {          // the borders are loaded -> the timeline exists (HyperFrames waits for it)
+    (function ready() {          // the borders are loaded -> the timeline exists (HyperFrames waits for it)
       if (!map.isSourceLoaded("c")) return setTimeout(ready, 50);
       const tl = gsap.timeline({paused: true, onUpdate: draw});
       tl.to(state, {t: D, duration: D, ease: "none"}, 0);
       draw();
       window.__timelines = window.__timelines || {};
       window.__timelines["root"] = tl;
-      if (location.search.includes("play")) tl.repeat(-1).repeatDelay(1).play();   // live preview in a browser
-    });
+    })();
   }
 });
 </script>

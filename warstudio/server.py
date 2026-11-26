@@ -255,7 +255,7 @@ def test_key(t: TestReq):
 
 @app.post("/api/maps/sample")
 def map_sample():
-    """Settings > Render test map: 6 s clip with the current map look (satellite if a key is set)."""
+    """Settings > Render test map: 6 s clip in the locked map style."""
     from . import maps
     from .config import load_style
     out = DATA_DIR / "map_sample.mp4"

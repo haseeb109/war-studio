@@ -88,14 +88,3 @@ def test_plan_survives_empty_json_mode_reply(monkeypatch):
     assert sorted(plans) == list(range(11))
     assert calls.count(True) == 2 and calls.count(False) == 2      # 2 chunks, each: empty JSON mode -> plain retry
 
-
-def test_map_look_satellite_only_with_key():
-    style = json.loads(Path("styles/beyond_military/style.json").read_text())
-    th, extra = maps.map_look(style, {}, {})
-    assert extra == {} and th == style["maps"]["theme"]                   # no key: locked Tactical dark
-    th, extra = maps.map_look(style, {}, {"ARCGIS_API_KEY": "k"})
-    assert th["satellite"] and extra["provider"] == "esri" and extra["tile_url"].startswith("https://ibasemaps")
-    th, extra = maps.map_look(style, {"map_satellite": False}, {"ARCGIS_API_KEY": "k"})
-    assert extra == {}
-    plan = maps.tilt({"to": {"center": [1, 2], "zoom": 5}}, style["maps"]["satellite_theme"])
-    assert plan["to"]["pitch"] == 55

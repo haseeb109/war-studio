@@ -15,7 +15,6 @@ from .util import UA
 SERVICES = {
     "AI33_API_KEY": "ai33", "DEEPSEEK_API_KEY": "deepseek", "HIVE_API_KEY": "hive", "CUSTOM_BRAIN_API_KEY": "custom",
     "GROQ_API_KEY": "groq", "GEMINI_API_KEY": "gemini", "DVIDS_API_KEY": "dvids", "PEXELS_API_KEY": "pexels", "PIXABAY_API_KEY": "pixabay",
-    "ARCGIS_API_KEY": "arcgis", "MAPBOX_TOKEN": "mapbox",
 }
 
 
@@ -191,32 +190,6 @@ def test_dvids(key):
                   + (f", {small} with tiny previews" if small else ", 640px previews"))
 
 
-def test_arcgis(key):
-    """Find which Esri World Imagery tile address this key can read; the working one is saved for the maps."""
-    if not key:
-        return False, "ARCGIS_API_KEY is empty"
-    from .config import save_settings
-    from .maps import ARCGIS_URLS
-    notes = []
-    for url in ARCGIS_URLS:
-        r = _get(url.format(z=5, y=14, x=20) + key)
-        ctype = r.headers.get("content-type", "")
-        if r.status_code == 200 and ctype.startswith("image/") and len(r.content) > 1000:
-            save_settings({"arcgis_tile_url": url})
-            return True, f"satellite imagery OK ({len(r.content) // 1024} KB tile) · now press 'Render test map'"
-        notes.append(f"{url.split('/')[2]}: HTTP {r.status_code} {r.text[:90] if 'image' not in ctype else ''}".strip())
-    return False, "Esri refused the key: " + " | ".join(notes)
-
-
-def test_mapbox(key):
-    if not key:
-        return False, "MAPBOX_TOKEN is empty"
-    r = _get(f"https://api.mapbox.com/v4/mapbox.satellite/5/20/14@2x.jpg90?access_token={key}")
-    if r.status_code == 200:
-        return True, "satellite imagery OK"
-    return False, f"Mapbox: HTTP {r.status_code} {r.text[:120]} (rate limit header {r.headers.get('x-rate-limit-limit', '?')})"
-
-
 def test(key_name, key=None):
     """Test one service. key=None uses the saved key."""
     svc = SERVICES.get(key_name)
@@ -227,8 +200,7 @@ def test(key_name, key=None):
         if svc in BRAIN_PRESETS:
             return test_brain(svc, key)
         return {"ai33": test_ai33, "groq": test_groq, "gemini": test_gemini, "pexels": test_pexels,
-                "pixabay": test_pixabay, "dvids": test_dvids,
-                "arcgis": test_arcgis, "mapbox": test_mapbox}[svc](key)
+                "pixabay": test_pixabay, "dvids": test_dvids}[svc](key)
     except httpx.HTTPError as e:
         return False, f"network error: {str(e)[:200]}"
     except Exception as e:

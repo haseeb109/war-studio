@@ -25,24 +25,11 @@ CHUNK = 8                   # runs per brain call (short replies come back compl
 MAX_RUN = 15.0              # seconds: a longer run of map beats is split (one camera move stays readable)
 PAD = 1.0
 SIDES = ("enemy", "ally", "neutral")
-# Esri World Imagery tile addresses (key appended); the Test button saves the one that works as arcgis_tile_url
-ARCGIS_URLS = [
-    "https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=",
-    "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/imagery/static/tile/{z}/{y}/{x}?token=",
-]
 
 
-def map_look(style, settings, keys):
-    """-> (theme, extra plan fields). Satellite when switched on and a key is set, else the locked Tactical dark."""
-    mp = style.get("maps", {})
-    if str(settings.get("map_satellite", True)).lower() not in ("false", "0", "no", "off"):
-        if keys.get("ARCGIS_API_KEY"):
-            url = settings.get("arcgis_tile_url") or ARCGIS_URLS[0]
-            return mp.get("satellite_theme") or mp.get("theme") or {}, {
-                "provider": "esri", "token": keys["ARCGIS_API_KEY"], "tile_url": url, "tile_size": 256}
-        if keys.get("MAPBOX_TOKEN"):
-            return mp.get("satellite_theme") or mp.get("theme") or {}, {"provider": "mapbox", "token": keys["MAPBOX_TOKEN"]}
-    return mp.get("theme") or {}, {}
+def map_look(style, settings=None, keys=None):
+    """-> (theme, extra plan fields): the locked map theme."""
+    return style.get("maps", {}).get("theme") or {}, {}
 
 
 def tilt(plan, theme):
@@ -68,7 +55,7 @@ def render_sample(style, settings, keys, out):
     work = build_page(plan, 6.0, Path(out).parent / "map_sample_work", theme)
     render_one(work, out, style["canvas"]["fps"], timeout=600)
     shutil.rmtree(work, ignore_errors=True)
-    return "satellite (" + extra["provider"] + ")" if extra else "tactical dark (no satellite key)"
+    return "tactical dark (locked)"
 
 
 PROMPT = """You plan animated military news maps (dark tactical style). For every RUN below, read the narration and
@@ -251,7 +238,7 @@ def build_page(plan, dur, work, theme):
     for f in ("maplibre-gl.js", "maplibre-gl.css", "countries.geojson"):
         shutil.copy(MAPS_DIR / f, work / f)
     shutil.copy(HF_DIR / "gsap.min.js", work / "gsap.min.js")
-    P = dict(plan, duration=round(dur, 3), theme=theme)       # plan may carry provider/token/tile_url
+    P = dict(plan, duration=round(dur, 3), theme=theme)
     page = (MAPS_DIR / "map_template.html").read_text().replace("__DUR__", f"{dur:.3f}").replace("__PLAN__", json.dumps(P))
     (work / "index.html").write_text(page)
     return work
@@ -259,10 +246,7 @@ def build_page(plan, dur, work, theme):
 
 def render_one(work, out, fps, timeout=1200):
     cmd = hf_cmd() + ["render", str(work), "--format", "mp4", "-o", str(out), "--fps", str(fps), "--workers", "1"]
-    import os
-    # satellite pages fetch their tiles before the timeline exists: give HyperFrames time to wait for it
-    env = dict(os.environ, PRODUCER_RENDER_READY_TIMEOUT_MS="240000", PRODUCER_PLAYER_READY_TIMEOUT_MS="240000")
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0 or not Path(out).exists():
         Path(out).unlink(missing_ok=True)
         raise RuntimeError((r.stderr or r.stdout or "hyperframes failed").strip()[-300:])
@@ -307,8 +291,6 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
             except Exception:
                 pass
     theme, extra = map_look(style, settings, keys)
-    if extra:
-        log(f"maps: satellite imagery ({extra['provider']})")
     fps = style["canvas"]["fps"]
     jobs = [(i, runs[i], plans[i]) for i in sorted(plans)]
     if not jobs:

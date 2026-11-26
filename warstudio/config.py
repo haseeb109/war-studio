@@ -20,7 +20,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 FAVORITES_FILE = DATA_DIR / "favorites.json"
 
 KEY_NAMES = ["AI33_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "DVIDS_API_KEY", "PEXELS_API_KEY",
-             "PIXABAY_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY", "MAPBOX_TOKEN", "ARCGIS_API_KEY"]
+             "PIXABAY_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"]
 
 # Brain (script -> shot specs). All speak the OpenAI chat-completions format.
 BRAIN_PRESETS = {
@@ -57,8 +57,6 @@ DEFAULT_SETTINGS = {
     "render_concurrency": 4,
     "maps_enabled": True,
     "maps_parallel": 3,
-    "map_satellite": True,
-    "arcgis_tile_url": "",
     "use_library": True,         # match beats against the local shot library before searching online
     "library_dir": "",           # empty = <WarStudio>/library/shots
     "library_max_gb": 200,

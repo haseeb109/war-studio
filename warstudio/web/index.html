@@ -395,14 +395,13 @@ async function loadStatus() {
     GROQ_API_KEY: "Clip rerank ONLY (not the script brain) · free key: console.groq.com/keys",
     GEMINI_API_KEY: "Clip rerank backup · aistudio.google.com/apikey", DVIDS_API_KEY: "Real military footage · api.dvidshub.net",
     PEXELS_API_KEY: "Stock footage · pexels.com/api", PIXABAY_API_KEY: "Stock footage · pixabay.com/api/docs",
-    HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom",
-    MAPBOX_TOKEN: "Satellite maps (pk. token) · account.mapbox.com",
-    ARCGIS_API_KEY: "Satellite maps (Esri World Imagery) · location.arcgis.com"};
+    HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom"};
   const brainKeys = ["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"];
   const keyRow = k => `<div class="keyrow"><div class="lab"><b>${k}</b><span>${KEYINFO[k] || ""}</span></div>
       <input type="password" data-key="${k}" placeholder="${STATUS.keys[k] ? "current: " + STATUS.keys[k] : "not set — paste key"}">
-      <button class="btn ghost" data-test="${k}">Test</button>${k === "ARCGIS_API_KEY" || k === "MAPBOX_TOKEN" ? `<button class="btn ghost" data-mapsample="1">Render test map</button>` : ""}<div class="keyres" id="res_${k}"></div></div>`;
-  $("#keyFields").innerHTML = STATUS.key_names.filter(k => !brainKeys.includes(k)).map(keyRow).join("");
+      <button class="btn ghost" data-test="${k}">Test</button><div class="keyres" id="res_${k}"></div></div>`;
+  $("#keyFields").innerHTML = STATUS.key_names.filter(k => !brainKeys.includes(k)).map(keyRow).join("") +
+    `<div class="keyrow"><div class="lab"><b>Map animation</b><span>6 s test clip in the locked map style</span></div><button class="btn ghost" data-mapsample="1">Render test map</button></div>`;
   const S = STATUS.settings;
   $("#brainProv").innerHTML = Object.entries(STATUS.brain_presets).map(([k, v]) => `<option value="${k}" ${k === S.brain_provider ? "selected" : ""}>${v}</option>`).join("");
   const drawBrain = () => {
