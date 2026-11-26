@@ -29,11 +29,12 @@ const P = __PLAN__;                       // {duration, title, from:{center,zoom
                                           //  points:[{name,lon,lat}], arrows:[{from:[lon,lat],to:[lon,lat]}], rings:[{lon,lat,km}]}
 const D = P.duration;
 const TH = Object.assign({sea: "#081321", land: "#1b2430", border: "#4b5a6b", hl: "#ffffff", arrow: "#ff3b30", ring: "#FFC400",
-  label: "#fff", accent: "#FFC400", font: '"Helvetica Neue",Arial,sans-serif', grid: "", scan: false, sweep: false}, P.theme || {});
+  label: "#fff", accent: "#FFC400", font: '"Helvetica Neue",Arial,sans-serif', grid: "", scan: false, sweep: false,
+  satellite: false, sat: {}, land_opacity: 1, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
 document.documentElement.style.setProperty("--acc", TH.accent);
 const map = new maplibregl.Map({
   container: "map", interactive: false, attributionControl: false, fadeDuration: 0,
-  preserveDrawingBuffer: true, center: P.from.center, zoom: P.from.zoom,
+  preserveDrawingBuffer: true, maxTileCacheSize: 6000, center: P.from.center, zoom: P.from.zoom,
   style: {version: 8, sources: {}, layers: [{id: "sea", type: "background", paint: {"background-color": TH.sea}}]}
 });
 const HL = {};
@@ -53,7 +54,9 @@ function draw() {
               zoom: P.from.zoom + (P.to.zoom - P.from.zoom) * e});
   map.redraw();                           // synchronous: this frame is complete before HyperFrames takes it
   const fx = document.getElementById("fx");
-  let svg = '<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="${TH.arrow}"/></marker></defs>';
+  let svg = `<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="${TH.arrow}"/></marker></defs>`;
+  if (TH.tint) svg += `<rect width="1920" height="1080" fill="${TH.tint}"/>`;
+  if (TH.vignette) svg += `<defs><radialGradient id="vg"><stop offset="55%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="${TH.vignette}"/></radialGradient></defs><rect width="1920" height="1080" fill="url(#vg)"/>`;
   (P.rings || []).forEach(r => {
     const show = Math.min(1, Math.max(0, (state.t - 0.6) / 0.6));
     const pts = ringCoords(r.lon, r.lat, r.km).map(c => map.project(c));
@@ -84,26 +87,41 @@ function draw() {
   });
   (P.countries || []).forEach(c => { const q = map.project(c.at); lab += `<div class="lbl" style="left:${q.x}px;top:${q.y}px;color:${TH.label};font-family:${TH.font}">${c.name}</div>`; });
   if (P.title) lab += `<div class="title" style="opacity:${Math.min(1, state.t / 0.3)}"><div class="bar"></div><div class="txt">${P.title}</div></div>`;
+  if (TH.satellite && P.token) lab += `<div style="position:absolute;right:18px;bottom:12px;font:500 15px ${TH.font};color:rgba(255,255,255,.75)">© Mapbox © OpenStreetMap</div>`;
   document.getElementById("labels").innerHTML = lab;
 }
 const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res));
 Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.fonts ? document.fonts.ready : 0]).then(([geo]) => {
   {
     if (!Object.keys(HL).length) HL["___"] = TH.land;      // a match expression needs at least one pair
+    if (TH.satellite && P.token) {          // real satellite imagery (Mapbox), graded by the theme
+      map.addSource("sat", {type: "raster", tileSize: 512, maxzoom: 19,
+        tiles: ["https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=" + P.token]});
+      const S = Object.assign({"raster-saturation": 0, "raster-contrast": 0, "raster-brightness-max": 1, "raster-brightness-min": 0,
+                               "raster-hue-rotate": 0}, TH.sat || {});
+      map.addLayer({id: "sat", type: "raster", source: "sat", paint: Object.assign({"raster-fade-duration": 0}, S)});
+    }
     map.addSource("c", {type: "geojson", data: geo});
     map.addLayer({id: "land", type: "fill", source: "c", paint: {"fill-color": ["match", ["get", "iso"], ...Object.entries(HL).flat(), TH.land],
-                                                                  "fill-opacity": ["match", ["get", "iso"], ...Object.keys(HL).flatMap(k => [k, 0.75]), 1]}});
+                                                                  "fill-opacity": ["match", ["get", "iso"], ...Object.keys(HL).flatMap(k => [k, TH.hl_opacity]), TH.satellite && P.token ? TH.land_opacity : 1]}});
     map.addLayer({id: "border", type: "line", source: "c", paint: {"line-color": TH.border, "line-width": 1.2}});
     map.addLayer({id: "hl", type: "line", source: "c", filter: ["in", ["get", "iso"], ["literal", Object.keys(HL)]],
                   paint: {"line-color": TH.hl, "line-width": 3}});
-    (function ready() {                     // the borders are loaded -> the timeline exists (HyperFrames waits for it)
+    const idle = (ms) => new Promise(res => { let done = false; const f = () => { if (!done) { done = true; res(); } };
+      map.once("idle", f); setTimeout(f, ms); map.triggerRepaint(); });
+    async function warm() {                 // satellite: fly the whole camera path once so every tile is cached
+      if (!(TH.satellite && P.token)) return;
+      for (let i = 0; i <= 24; i++) { state.t = D * i / 24; draw(); await idle(4000); }
+      state.t = 0; draw(); await idle(4000);
+    }
+    warm().then(function ready() {          // the borders are loaded -> the timeline exists (HyperFrames waits for it)
       if (!map.isSourceLoaded("c")) return setTimeout(ready, 50);
       const tl = gsap.timeline({paused: true, onUpdate: draw});
       tl.to(state, {t: D, duration: D, ease: "none"}, 0);
       draw();
       window.__timelines = window.__timelines || {};
       window.__timelines["root"] = tl;
-    })();
+    });
   }
 });
 </script>

@@ -395,7 +395,8 @@ async function loadStatus() {
     GROQ_API_KEY: "Clip rerank ONLY (not the script brain) · free key: console.groq.com/keys",
     GEMINI_API_KEY: "Clip rerank backup · aistudio.google.com/apikey", DVIDS_API_KEY: "Real military footage · api.dvidshub.net",
     PEXELS_API_KEY: "Stock footage · pexels.com/api", PIXABAY_API_KEY: "Stock footage · pixabay.com/api/docs",
-    HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom"};
+    HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom",
+    MAPBOX_TOKEN: "Satellite maps (pk. token) · account.mapbox.com"};
   const brainKeys = ["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"];
   const keyRow = k => `<div class="keyrow"><div class="lab"><b>${k}</b><span>${KEYINFO[k] || ""}</span></div>
       <input type="password" data-key="${k}" placeholder="${STATUS.keys[k] ? "current: " + STATUS.keys[k] : "not set — paste key"}">
