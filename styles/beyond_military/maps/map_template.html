@@ -30,11 +30,12 @@ const P = __PLAN__;                       // {duration, title, from:{center,zoom
 const D = P.duration;
 const TH = Object.assign({sea: "#081321", land: "#1b2430", border: "#4b5a6b", hl: "#ffffff", arrow: "#ff3b30", ring: "#FFC400",
   label: "#fff", accent: "#FFC400", font: '"Helvetica Neue",Arial,sans-serif', grid: "", scan: false, sweep: false,
-  grain: 0, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
+  hl_opacity: 0.75, tint: "", vignette: 0, glow: "", depth: 0, soft: 0}, P.theme || {});
+if (TH.soft) document.getElementById("map").style.filter = `blur(${TH.soft}px)`;   // a touch softer, like filmed footage
 document.documentElement.style.setProperty("--acc", TH.accent);
 const map = new maplibregl.Map({
   container: "map", interactive: false, attributionControl: false, fadeDuration: 0,
-  preserveDrawingBuffer: true, maxPitch: 70, center: P.from.center, zoom: P.from.zoom,
+  preserveDrawingBuffer: true, maxPitch: 70, pixelRatio: P.pixel_ratio || 1, center: P.from.center, zoom: P.from.zoom,
   style: {version: 8, sources: {}, layers: [{id: "sea", type: "background", paint: {"background-color": TH.sea}}]}
 });
 const HL = {};
@@ -48,49 +49,81 @@ function ringCoords(lon, lat, km) {
   return pts;
 }
 const state = {t: 0};
+const clamp = v => Math.min(1, Math.max(0, v)), outCubic = v => 1 - Math.pow(1 - v, 3);
+const outBack = v => 1 + 2.2 * Math.pow(v - 1, 3) + 1.2 * Math.pow(v - 1, 2);
+// the order things appear in: countries -> pins drop -> arrows draw -> rings spread (scaled to the clip length)
+const T_HL = D * 0.10, T_PIN = Math.min(D * 0.30, 1.2), PIN_GAP = 0.18;
+const T_ARROW = T_PIN + 0.45 + (P.points || []).length * PIN_GAP * 0.5, ARROW_LEN = Math.min(1.4, Math.max(0.6, D * 0.3));
+const T_RING = T_ARROW + ((P.arrows || []).length ? ARROW_LEN * 0.8 : 0);
+let lastHl = -1;
 function draw() {
-  const k = Math.min(1, state.t / Math.max(0.1, D * 0.85)), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+  const t = state.t;
+  const k = clamp(t / Math.max(0.1, D * 0.9)), e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;   // slow start, soft landing
   map.jumpTo({center: [P.from.center[0] + (P.to.center[0] - P.from.center[0]) * e, P.from.center[1] + (P.to.center[1] - P.from.center[1]) * e],
               zoom: P.from.zoom + (P.to.zoom - P.from.zoom) * e,
               pitch: (P.from.pitch || 0) + ((P.to.pitch || 0) - (P.from.pitch || 0)) * e,
-              bearing: (P.from.bearing || 0) + ((P.to.bearing || 0) - (P.from.bearing || 0)) * e});
+              bearing: (P.from.bearing || 0) + ((P.to.bearing || 0) - (P.from.bearing || 0)) * e + (P.to.pitch ? 3 * t / D : 0)});
+  const hl = outCubic(clamp((t - T_HL) / 0.6));
+  if (Math.abs(hl - lastHl) > 0.01 && map.getLayer("land")) {
+    lastHl = hl;
+    map.setPaintProperty("land", "fill-opacity", ["match", ["get", "iso"], ...Object.keys(HL).flatMap(c => [c, TH.hl_opacity * hl]), 1]);
+    map.setPaintProperty("land", "fill-color", ["match", ["get", "iso"], ...Object.entries(HL).flatMap(([c, col]) => [c, col]), TH.land]);
+    map.setPaintProperty("hl", "line-opacity", hl);
+  }
   map.redraw();                           // synchronous: this frame is complete before HyperFrames takes it
   const fx = document.getElementById("fx");
   let svg = `<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="${TH.arrow}"/></marker></defs>`;
   if (TH.tint) svg += `<rect width="1920" height="1080" fill="${TH.tint}"/>`;
-  if (TH.vignette) svg += `<defs><radialGradient id="vg"><stop offset="55%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="${TH.vignette}"/></radialGradient></defs><rect width="1920" height="1080" fill="url(#vg)"/>`;
-  (P.rings || []).forEach(r => {
-    const show = Math.min(1, Math.max(0, (state.t - 0.6) / 0.6));
-    const pts = ringCoords(r.lon, r.lat, r.km).map(c => map.project(c));
+  (P.rings || []).forEach((r, i) => {
+    const show = outCubic(clamp((t - T_RING - i * 0.25) / 0.7));
+    if (show <= 0) return;
+    const c = [r.lon, r.lat], pts = ringCoords(r.lon, r.lat, r.km * (0.6 + 0.4 * show)).map(q => map.project(q));
     svg += `<polygon points="${pts.map(p => p.x + "," + p.y).join(" ")}" fill="${TH.ring}" fill-opacity="${0.1 * show}" stroke="${TH.ring}" stroke-width="3" stroke-dasharray="14 10" opacity="${show}"/>`;
   });
   (P.arrows || []).forEach((a, i) => {
-    const s = Math.min(1, Math.max(0, (state.t - 0.8 - i * 0.3) / 1.4)), se = 1 - Math.pow(1 - s, 3);
+    const t0 = T_ARROW + i * 0.35, s = clamp((t - t0) / ARROW_LEN), se = outCubic(s);
     if (s <= 0) return;
     const A = map.project(a.from), B = map.project(a.to);
     const mx = (A.x + B.x) / 2 - (B.y - A.y) * 0.18, my = (A.y + B.y) / 2 + (B.x - A.x) * 0.18;
     const n = 40, pts = [];
     for (let j = 0; j <= Math.round(n * se); j++) { const u = j / n; pts.push([(1-u)*(1-u)*A.x + 2*(1-u)*u*mx + u*u*B.x, (1-u)*(1-u)*A.y + 2*(1-u)*u*my + u*u*B.y]); }
-    if (pts.length > 1) svg += `<polyline points="${pts.map(p => p.join(",")).join(" ")}" fill="none" stroke="${TH.arrow}" stroke-width="7" stroke-linecap="round" marker-end="url(#ah)"/>`;
+    if (pts.length > 1) {
+      const pl = pts.map(p => p.join(",")).join(" ");
+      svg += `<polyline points="${pl}" fill="none" stroke="${TH.arrow}" stroke-width="22" stroke-linecap="round" opacity=".22"/>` +   // glow trail
+             `<polyline points="${pl}" fill="none" stroke="${TH.arrow}" stroke-width="7" stroke-linecap="round" ${se > 0.15 ? 'marker-end="url(#ah)"' : ""}/>`;
+    }
+    const imp = clamp((t - t0 - ARROW_LEN) / 0.6);                 // impact pulse where the arrow lands
+    if (imp > 0 && imp < 1) svg += `<circle cx="${B.x}" cy="${B.y}" r="${10 + 60 * outCubic(imp)}" fill="none" stroke="${TH.arrow}" stroke-width="${5 * (1 - imp) + 1}" opacity="${1 - imp}"/>`;
   });
   if (TH.grid) { for (let x = 0; x <= 1920; x += 120) svg += `<line x1="${x}" y1="0" x2="${x}" y2="1080" stroke="${TH.grid}" stroke-width="1"/>`;
                  for (let y = 0; y <= 1080; y += 120) svg += `<line x1="0" y1="${y}" x2="1920" y2="${y}" stroke="${TH.grid}" stroke-width="1"/>`; }
   if (TH.sweep && (P.rings || [])[0]) { const r0 = P.rings[0], c = map.project([r0.lon, r0.lat]), e2 = map.project(ringCoords(r0.lon, r0.lat, r0.km)[0]);
-    const R = Math.hypot(e2.x - c.x, e2.y - c.y), a = state.t * 2.2;
+    const R = Math.hypot(e2.x - c.x, e2.y - c.y), a = t * 2.2;
     svg += `<line x1="${c.x}" y1="${c.y}" x2="${c.x + R * Math.cos(a)}" y2="${c.y + R * Math.sin(a)}" stroke="${TH.ring}" stroke-width="4" opacity=".9"/>`;
     [0.33, 0.66].forEach(f => svg += `<circle cx="${c.x}" cy="${c.y}" r="${R * f}" fill="none" stroke="${TH.ring}" stroke-width="1.5" opacity=".5"/>`); }
-  if (TH.grain) svg += `<filter id="gr"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="${Math.floor(state.t * 30)}"/><feColorMatrix type="saturate" values="0"/></filter><rect width="1920" height="1080" filter="url(#gr)" opacity="${TH.grain}" style="mix-blend-mode:overlay"/>`;
+  if (TH.vignette) svg += `<defs><radialGradient id="vg"><stop offset="55%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="${TH.vignette}"/></radialGradient></defs><rect width="1920" height="1080" fill="url(#vg)"/>`;
   if (TH.scan) svg += `<rect width="1920" height="1080" fill="url(#scan)"/><defs><pattern id="scan" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="2" fill="rgba(0,0,0,.18)"/></pattern></defs>`;
   fx.innerHTML = svg;
   let lab = "";
+  const placed = [];
+  const cz = clamp((map.getZoom() - (P.label_zoom || 4.2)) / 0.6) * hl;       // names only once there is room
+  const cpos = (P.countries || []).map(c => { const q = map.project(c.at); if (cz > 0.05) placed.push({x: q.x, y: q.y, w: c.name.length * 26}); return q; });
   (P.points || []).forEach((p, i) => {
-    const o = Math.min(1, Math.max(0, (state.t - 0.4 - i * 0.15) / 0.3)), q = map.project([p.lon, p.lat]);
-    lab += `<div style="position:absolute;left:${q.x}px;top:${q.y}px;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:${TH.accent};box-shadow:0 0 0 6px rgba(0,0,0,.25);opacity:${o}"></div>` +
-           `<div class="lbl small" style="left:${q.x}px;top:${q.y - 36}px;opacity:${o};color:${TH.accent};font-family:${TH.font}">${p.name}</div>`;
+    const d = clamp((t - T_PIN - i * PIN_GAP) / 0.45), q = map.project([p.lon, p.lat]);
+    if (d <= 0) return;
+    const drop = (1 - outBack(d)) * -70, o = clamp(d * 2);                         // the pin falls into place
+    let ly = q.y - 36;                                                             // label above; below if it would collide
+    const w = p.name.length * 18, hit = y => placed.some(b => Math.abs(b.x - q.x) < (b.w + w) / 2 + 10 && Math.abs(b.y - y) < 40);
+    if (hit(ly)) ly = q.y + 36;
+    if (hit(ly)) ly = q.y - 76;
+    placed.push({x: q.x, y: ly, w});
+    const land = clamp((d - 0.55) / 0.45);
+    if (land > 0 && land < 1) lab += `<div style="position:absolute;left:${q.x}px;top:${q.y}px;width:${18 + 50 * land}px;height:${18 + 50 * land}px;transform:translate(-50%,-50%);border-radius:50%;border:2px solid ${TH.accent};opacity:${1 - land}"></div>`;
+    lab += `<div style="position:absolute;left:${q.x}px;top:${q.y + drop}px;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:${TH.accent};box-shadow:0 0 0 6px rgba(0,0,0,.25);opacity:${o}"></div>` +
+           `<div class="lbl small" style="left:${q.x}px;top:${ly}px;opacity:${clamp((d - 0.4) / 0.4)};color:${TH.accent};font-family:${TH.font}">${p.name}</div>`;
   });
-  const cz = Math.min(1, Math.max(0, (map.getZoom() - (P.label_zoom || 4.2)) / 0.6));     // names only once there is room
-  (P.countries || []).forEach(c => { const q = map.project(c.at); lab += `<div class="lbl" style="left:${q.x}px;top:${q.y}px;color:${TH.label};font-family:${TH.font};opacity:${cz}">${c.name}</div>`; });
-  if (P.title) lab += `<div class="title" style="opacity:${Math.min(1, state.t / 0.3)}"><div class="bar"></div><div class="txt">${P.title}</div></div>`;
+  (P.countries || []).forEach((c, ci) => { const q = cpos[ci]; lab += `<div class="lbl" style="left:${q.x}px;top:${q.y}px;color:${TH.label};font-family:${TH.font};opacity:${cz}">${c.name}</div>`; });
+  if (P.title) lab += `<div class="title" style="opacity:${clamp(t / 0.3)}"><div class="bar"></div><div class="txt">${P.title}</div></div>`;
   document.getElementById("labels").innerHTML = lab;
 }
 const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res));
@@ -100,9 +133,13 @@ Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.
     map.addSource("c", {type: "geojson", data: geo});
     map.addLayer({id: "land", type: "fill", source: "c", paint: {"fill-color": ["match", ["get", "iso"], ...Object.entries(HL).flat(), TH.land],
                                                                   "fill-opacity": ["match", ["get", "iso"], ...Object.keys(HL).flatMap(k => [k, TH.hl_opacity]), 1]}});
+    if (TH.depth) map.addLayer({id: "depth", type: "line", source: "c",                       // soft shading inside every coast/border
+      paint: {"line-color": "#000", "line-width": 26, "line-blur": 22, "line-opacity": TH.depth, "line-offset": 12}});
+    if (TH.glow) map.addLayer({id: "glow", type: "line", source: "c",                         // faint glow along the coasts
+      paint: {"line-color": TH.glow, "line-width": 9, "line-blur": 8, "line-opacity": 0.45}});
     map.addLayer({id: "border", type: "line", source: "c", paint: {"line-color": TH.border, "line-width": 1.2}});
     map.addLayer({id: "hl", type: "line", source: "c", filter: ["in", ["get", "iso"], ["literal", Object.keys(HL)]],
-                  paint: {"line-color": TH.hl, "line-width": 3}});
+                  paint: {"line-color": TH.hl, "line-width": 3, "line-opacity": 0}});
     (function ready() {          // the borders are loaded -> the timeline exists (HyperFrames waits for it)
       if (!map.isSourceLoaded("c")) return setTimeout(ready, 50);
       const tl = gsap.timeline({paused: true, onUpdate: draw});

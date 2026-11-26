@@ -51,6 +51,7 @@ def test_run_step_cuts_one_clip_per_beat(tmp_path, monkeypatch):
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=navy:s=320x180:r=30:d=7",
                         "-pix_fmt", "yuv420p", str(out)], check=True)
     monkeypatch.setattr(maps, "render_one", fake_render)
+    monkeypatch.setattr(maps, "CACHE_DIR", tmp_path / "cache")
     style = json.loads(Path("styles/beyond_military/style.json").read_text())
     fetched = {}
     n = maps.run_step(tmp_path, BEATS, SPECS, 12.0, {}, {}, style, lambda *a, **k: None, fetched)

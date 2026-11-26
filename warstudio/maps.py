@@ -16,7 +16,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .config import ROOT
+from .config import ROOT, DATA_DIR
+
+CACHE_DIR = DATA_DIR / "map_cache"      # same map (plan + style + length) in another video -> no new render
 from .util import read_json, write_json, duration
 
 MAPS_DIR = ROOT / "styles" / "beyond_military" / "maps"
@@ -231,6 +233,26 @@ def hf_cmd():
     return None
 
 
+def cache_key(plan, dur, theme):
+    import hashlib
+    tpl = (MAPS_DIR / "map_template.html").read_bytes()
+    raw = json.dumps([plan, round(dur, 2), theme], sort_keys=True).encode() + tpl
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def render_cached(plan, dur, theme, clip, work, fps):
+    """Render one map clip, or copy it from the cache if the exact same map was made before."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    hit = CACHE_DIR / f"{cache_key(plan, dur, theme)}.mp4"
+    if hit.exists():
+        shutil.copy(hit, clip)
+        return True
+    render_one(build_page(plan, dur, work, theme), clip, fps)
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copy(clip, hit)
+    return False
+
+
 def build_page(plan, dur, work, theme):
     work = Path(work)
     shutil.rmtree(work, ignore_errors=True)
@@ -239,6 +261,7 @@ def build_page(plan, dur, work, theme):
         shutil.copy(MAPS_DIR / f, work / f)
     shutil.copy(HF_DIR / "gsap.min.js", work / "gsap.min.js")
     P = dict(plan, duration=round(dur, 3), theme=theme)
+    P.setdefault("pixel_ratio", 0.75)       # the map is drawn at 3/4 size and scaled up: faster, a little softer
     page = (MAPS_DIR / "map_template.html").read_text().replace("__DUR__", f"{dur:.3f}").replace("__PLAN__", json.dumps(P))
     (work / "index.html").write_text(page)
     return work
@@ -298,7 +321,7 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
         return 0
     conc = max(1, int(settings.get("maps_parallel", 3) or 3))
     log(f"maps: rendering {len(jobs)} map clip(s) for {sum(len(r['beats']) for _, r, _ in jobs)} beats, {conc} at a time")
-    lock, done, n_beats = threading.Lock(), [0], [0]
+    lock, done, n_beats, cached = threading.Lock(), [0], [0], [0]
     t0 = time.time()
 
     def one(job):
@@ -306,9 +329,9 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
         dur = (r["end"] - r["start"]) + PAD
         clip = mdir / f"run_{r['beats'][0]}_{len(r['beats'])}.mp4"
         try:
-            if not clip.exists():
-                render_one(build_page(tilt(dict(plan, **extra), theme), dur, mdir / f"work_{i}", theme), clip, fps)
-                shutil.rmtree(mdir / f"work_{i}", ignore_errors=True)
+            if not clip.exists() and render_cached(tilt(dict(plan, **extra), theme), dur, theme, clip, mdir / f"work_{i}", fps):
+                with lock:
+                    cached[0] += 1
             got = {}
             bstart = {str(b["id"]): b for b in beats}
             order = [str(b["id"]) for b in beats]
@@ -334,5 +357,6 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
 
     with ThreadPoolExecutor(conc) as ex:
         list(ex.map(one, jobs))
-    log(f"maps: {n_beats[0]} beats got a map ({done[0]}/{len(jobs)} clips, {time.time() - t0:.0f} s)")
+    log(f"maps: {n_beats[0]} beats got a map ({done[0]}/{len(jobs)} clips, {cached[0]} reused from earlier videos, "
+        f"{time.time() - t0:.0f} s)")
     return n_beats[0]
