@@ -1,7 +1,7 @@
 """Satellite map style test: 4 styles on real Mapbox satellite imagery, deep zoom from space to the port.
 
 Run on the Mac (from the war-studio folder):   uv run python tools/map_sat_test.py
-Needs MAPBOX_TOKEN in Settings (keys). Output: map_sat_<style>.mp4 for each style + map_sat_all.mp4 (all 4 in a row).
+Needs MAPBOX_TOKEN in Settings (keys), or pass it:  uv run python tools/map_sat_test.py pk.xxxx Output: map_sat_<style>.mp4 for each style + map_sat_all.mp4 (all 4 in a row).
 """
 import json
 import shutil
@@ -72,7 +72,10 @@ def render(name, theme, token):
 
 
 def main():
-    token = load_keys().get("MAPBOX_TOKEN", "")
+    import os
+    token = (sys.argv[1] if len(sys.argv) > 1 else "") or os.environ.get("MAPBOX_TOKEN", "") or \
+        load_keys().get("MAPBOX_TOKEN", "")
+    token = token.strip().strip("'\"")
     if not token.startswith("pk."):
         print("MAPBOX_TOKEN missing: add it in Settings (it starts with pk.)")
         sys.exit(1)
