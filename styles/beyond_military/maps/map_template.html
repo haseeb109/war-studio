@@ -97,6 +97,12 @@ const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res)
 Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.fonts ? document.fonts.ready : 0]).then(([geo]) => {
   {
     if (!Object.keys(HL).length) HL["___"] = TH.land;      // a match expression needs at least one pair
+    if (location.search.includes("play")) {   // preview only: say plainly when the satellite tiles do not load
+      const warn = m => { let d = document.getElementById("satwarn"); if (!d) { d = document.createElement("div"); d.id = "satwarn";
+        d.style.cssText = "position:absolute;left:0;right:0;top:0;padding:14px;background:#b3261e;color:#fff;font:600 26px Arial;z-index:99"; document.body.appendChild(d); } d.textContent = m; };
+      if (TH.satellite && !P.token) warn("NO MAPBOX TOKEN - satellite is off");
+      map.on("error", e => warn("SATELLITE NOT LOADING: " + ((e.error && (e.error.status || e.error.message)) || "error")));
+    }
     if (TH.satellite && P.token) {          // real satellite imagery (Mapbox), graded by the theme
       map.addSource("sat", {type: "raster", tileSize: 512, maxzoom: 19,
         tiles: ["https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=" + P.token]});
