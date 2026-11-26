@@ -110,3 +110,19 @@ def test_one_clip_max_three_times_and_far_apart(tmp_path, monkeypatch):
         if p:
             assert i * 3.0 - seen.get(p["id"], -999) >= 60
             seen[p["id"]] = i * 3.0
+
+
+def test_two_library_shots_of_the_same_moment_are_not_back_to_back(tmp_path, monkeypatch):
+    setup(tmp_path, 4, 3, scene=lambda i: "same")
+    import json as _j
+    cands = _j.loads((tmp_path / "candidates.json").read_text())
+    for i in cands:                                       # c0 and c1 are cut from one source video, same seconds
+        for c in cands[i]:
+            c["origin"] = "dvids:777" if c["id"] in ("c0", "c1") else "dvids:888"
+            c["src_start"], c["src_len"] = (10.0, 3.0) if c["id"] in ("c0", "c1") else (0.0, 3.0)
+    write_json(tmp_path / "candidates.json", cands)
+    monkeypatch.setattr(rank, "clip_scores", lambda s, t, ps: [0.3] * len(ps))
+    fake = FakeRR(lambda bid: {"scores": [9, 8, 1], "best": 1})
+    monkeypatch.setattr(rank, "Reranker", lambda *a, **k: fake)
+    picks = rank.run_step(tmp_path, {}, {}, {"footage": {"same_source_cooldown_seconds": 0}}, lambda m, **k: None)
+    assert picks["0"]["id"] == "c0" and picks["1"]["id"] == "c2"     # c1 would replay c0's moment

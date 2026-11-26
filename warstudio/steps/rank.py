@@ -303,13 +303,27 @@ def run_step(proj, keys, settings, style, log):
     max_uses = int(settings.get("clip_max_uses", 3) or 3)
     gap = float(settings.get("clip_reuse_gap_seconds", 60))
     total_uses, last_use = Counter(), {}
+    shown = []        # (time, origin source video, start, end) of every pick
+
+    def origin(c):
+        o = c.get("origin")
+        if o and not o.endswith(":"):
+            return o, float(c.get("src_start") or 0), float(c.get("src_start") or 0) + float(c.get("src_len") or 0)
+        if c.get("source") in ("dvids", "commons", "pexels", "pixabay"):
+            return f"{c['source']}:{c['id']}", 0.0, 1e9
+        return None, 0, 0
+
+    def same_footage(c, t, min_gap):
+        """a library shot cut from a source video whose same moment was shown within min_gap -> a visible replay"""
+        o, a, b = origin(c)
+        return bool(o) and any(o == o2 and a < b2 and a2 < b and t - t2 < min_gap for t2, o2, a2, b2 in shown)
 
     def rule_block(t, min_gap):
         return {k for k, n in total_uses.items() if n >= max_uses} | \
                {k for k, lt in last_use.items() if t - lt < min_gap}
     scene_picks = {}  # scene -> winners in that scene
     keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit",
-            "clip_score", "query", "tier", "scene_reuse", "license", "min_start", "lib_penalty")
+            "clip_score", "query", "tier", "scene_reuse", "license", "min_start", "lib_penalty", "origin", "src_start", "src_len")
     for b in beats:
         bid = str(b["id"])
         sp = specs[b["id"]]
@@ -320,6 +334,7 @@ def run_step(proj, keys, settings, style, log):
                 recent.append((b["start"], _key(p), scene))
                 total_uses[_key(p)] += 1
                 last_use[_key(p)] = b["start"]
+                shown.append((b["start"],) + origin(p))
                 if scene:
                     scene_picks.setdefault(scene, []).append(p)
             continue
@@ -328,7 +343,7 @@ def run_step(proj, keys, settings, style, log):
         blocked |= {sk for sk, n in scene_uses.items() if n >= SCENE_REUSE_MAX}     # max 3 uses inside one scene
         cands_b = (pool.get(bid) or []) + (tops.get(bid) or [])
         for g in (gap, min(gap, 20.0), min(gap, float(cool))):      # nothing fresh left: shorter gap, never > max uses
-            hard = rule_block(b["start"], g)
+            hard = rule_block(b["start"], g) | {_key(c) for c in cands_b if same_footage(c, b["start"], g)}
             if not cands_b or not all(_key(c) in blocked | hard for c in cands_b):
                 break
         blocked |= hard
@@ -381,6 +396,7 @@ def run_step(proj, keys, settings, style, log):
         recent.append((b["start"], _key(winner), scene))
         total_uses[_key(winner)] += 1
         last_use[_key(winner)] = b["start"]
+        shown.append((b["start"],) + origin(winner))
         if scene:
             scene_picks.setdefault(scene, []).append(winner)
     write_json(out_path, picks)

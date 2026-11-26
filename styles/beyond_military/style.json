@@ -20,7 +20,7 @@
     "classes": ["real", "flir", "cockpit", "control_room", "map"],
     "source_order": ["dvids", "commons", "pexels", "pixabay"],
     "same_source_cooldown_seconds": 90,
-    "motion": {"drift": true, "drift_scale": 1.06}
+    "motion": {"drift": false, "drift_scale": 1.06, "zoom_out_lower_thirds": false, "_drift_note": "user (v1.8): footage as it is - no pan, no zoom"}
   },
 
   "grade": {

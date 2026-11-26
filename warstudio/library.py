@@ -310,7 +310,10 @@ class LibraryIndex:
                         "video_url": r["file"], "action": r.get("action") or "",
                         "duration": r["length"], "tier": "exact" if ent_ok else "category", "query": "library",
                         "credit": r["credit"] or "", "license": r["license"] or "", "page_url": r["page_url"] or "",
-                        "lib_score": round(score, 4), "clip_sim": round(sim, 4), "lib_penalty": round(pen, 4)})
+                        "lib_score": round(score, 4), "clip_sim": round(sim, 4), "lib_penalty": round(pen, 4),
+                        # where the shot was cut from: two library shots of one source video must not replay a moment
+                        "origin": f"{r.get('source') or ''}:{r.get('src_id') or ''}",
+                        "src_start": float(r.get("src_start") or 0), "src_len": float(r.get("length") or 0)})
         return res
 
 

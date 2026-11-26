@@ -15,7 +15,7 @@ from ..util import read_json, write_json, run, video_encoder, encoder_args
 FALLBACK_COLOR = "0x101418"
 
 
-def segment_cmd(src, frames, fps, style, fclass, ov, out, enc, crop_bottom=0.0):
+def segment_cmd(src, frames, fps, style, fclass, ov, out, enc, crop_bottom=0.0, offset=0.0):
     W, H = style["canvas"]["width"], style["canvas"]["height"]
     dur = frames / fps
     grade = style["grade"].get(fclass, style["grade"]["real"])
@@ -23,15 +23,22 @@ def segment_cmd(src, frames, fps, style, fclass, ov, out, enc, crop_bottom=0.0):
     if fclass == "map_clip":                      # a rendered map already moves and has its locked colours
         grade, s = "null", 1.0
     y = "(ih-oh)/2"
+    if not style["footage"]["motion"].get("zoom_out_lower_thirds", True):
+        crop_bottom = 0.0                         # user: footage as it is - no zoom, no pan
     if crop_bottom and src:
         # a lower-third sits in the bottom `crop_bottom` of the clip: zoom in, anchored to the top, so it leaves the frame
         s = max(s, 1.0 / (1.0 - min(float(crop_bottom), 0.2)))
         y = "0"
     sw, sh = int(W * s) // 2 * 2, int(H * s) // 2 * 2
-    chain = (f"[0:v]scale={sw}:{sh},crop={W}:{H}:x='(iw-ow)*t/{max(dur, 0.1):.3f}':y='{y}',"
+    xpan = f"(iw-ow)*t/{max(dur, 0.1):.3f}" if s > 1.0001 else "0"
+    fit = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}" if s <= 1.0001 else
+           f"scale={sw}:{sh},crop={W}:{H}:x='{xpan}':y='{y}'")
+    chain = (f"[0:v]{fit},"
              f"{grade},tpad=stop_mode=clone:stop_duration={dur:.2f},trim=end_frame={frames},setpts=PTS-STARTPTS,fps={fps}")
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if src:
+        if offset > 0.05:
+            cmd += ["-ss", f"{offset:.3f}"]
         cmd += ["-i", str(src)]
     else:
         cmd += ["-f", "lavfi", "-i", f"color=c={FALLBACK_COLOR}:s={W}x{H}:r={fps}:d={dur + 0.5:.2f}"]
@@ -90,16 +97,20 @@ def run_step(proj, settings, style, log, use_hf=True):
     segdir.mkdir(exist_ok=True)
     seg_files = []
     jobs = []
-    last_src = None
+    last_src, src_pos = None, {}          # src_pos: seconds of each file already shown (continue, never replay)
     for i, b in enumerate(beats):
         bid = str(b["id"])
         start_f = round(b["start"] * fps)
         end_f = round((total if i == len(beats) - 1 else beats[i + 1]["start"]) * fps)
         frames = max(1, end_f - start_f)
         f = fetched.get(bid)
-        src = f["file"] if f and Path(f["file"]).exists() else last_src
-        if f and Path(f["file"]).exists():
+        own = bool(f and Path(f["file"]).exists())
+        src = f["file"] if own else last_src
+        if own:
             last_src = f["file"]
+        offset = 0.0 if own else src_pos.get(src, 0.0)        # no clip for this beat: the previous one plays on
+        if src:
+            src_pos[src] = offset + frames / fps
         out = segdir / f"seg_{int(bid):05d}.mp4"
         seg_files.append(out)
         if out.exists():
@@ -107,7 +118,7 @@ def run_step(proj, settings, style, log, use_hf=True):
         crop = (f or {}).get("crop_bottom", 0.0) if f and Path(f["file"]).exists() else 0.0
         jobs.append((bid, out, segment_cmd(src, frames, fps, style, ("map_clip" if (f or {}).get("source") == "map" and src == (f or {}).get("file")
                                             else spec.get(b["id"], {}).get("footage_class", "real")),
-                                           rendered.get(bid), out, enc, crop)))
+                                           rendered.get(bid), out, enc, crop, offset)))
 
     # several segments at once: the Mac's media engine and CPU cores have room for 4
     import threading
