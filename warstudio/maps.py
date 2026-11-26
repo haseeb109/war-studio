@@ -112,6 +112,54 @@ def find_runs(beats, specs, vo_total):
     return [{k: r[k] for k in ("beats", "start", "end", "text")} for r in runs]
 
 
+def select_runs(runs, beats, specs, vo_total, settings, log=None):
+    """User rule (v1.7): a 20-30 min video gets 5-6 maps, each 4-5 s, and one inside the first minute.
+    Picks map runs spread over the video; each run is stretched/trimmed to 4-5 s of beats."""
+    mins = vo_total / 60.0
+    n = int(settings.get("maps_per_video", 0) or 0) or max(1, min(6, round(mins / 4.6)))
+    lo, hi = float(settings.get("map_min_seconds", 4.0)), float(settings.get("map_max_seconds", 5.0))
+    order = [str(b["id"]) for b in beats]
+    starts = {str(b["id"]): b["start"] for b in beats}
+    ends = {str(b["id"]): (vo_total if i == len(beats) - 1 else beats[i + 1]["start"]) for i, b in enumerate(beats)}
+    texts = {str(b["id"]): b["text"] for b in beats}
+
+    def shape(first):
+        """beats from `first` covering lo..hi seconds"""
+        i, ids = order.index(first), []
+        while i < len(order):
+            ids.append(order[i])
+            if ends[order[i]] - starts[first] >= lo:
+                break
+            i += 1
+        while len(ids) > 1 and ends[ids[-1]] - starts[first] > hi + 0.6:
+            ids.pop()
+        return {"beats": ids, "start": starts[first], "end": ends[ids[-1]], "text": " ".join(texts[x] for x in ids)}
+
+    cands = [shape(r["beats"][0]) for r in runs]
+    chosen = []
+    early = [c for c in cands if c["start"] < 60]
+    if early:
+        chosen.append(early[0])
+    elif beats:
+        # no geography in the first minute: the map goes on the second sentence of the hook, about the title's region
+        first = next((str(b["id"]) for b in beats if b["start"] >= 4), str(beats[0]["id"]))
+        chosen.append(dict(shape(first), forced=True))
+    # the rest: as evenly spread as possible over the video
+    for k in range(1, n):
+        target = vo_total * k / n + (vo_total / n) / 2
+        space = min(45.0, vo_total / (2 * n))
+        free = [c for c in cands if all(abs(c["start"] - x["start"]) > space and not (set(c["beats"]) & set(x["beats"]))
+                                        for x in chosen)]
+        if not free:
+            break
+        chosen.append(min(free, key=lambda c: abs(c["start"] - target)))
+    chosen.sort(key=lambda c: c["start"])
+    if log:
+        log(f"maps: {len(chosen)} map(s) for a {mins:.0f} min video (rule: {n}, {lo:.0f}-{hi:.0f} s each, one in the first "
+            f"minute) out of {len(runs)} map moments")
+    return chosen
+
+
 def _num(v, lo, hi):
     try:
         v = float(v)
@@ -286,7 +334,8 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
     if str(settings.get("maps_enabled", True)).lower() in ("false", "0", "no", "off"):
         return 0
     proj = Path(proj)
-    runs = [r for r in find_runs(beats, specs, vo_total) if not all(fetched.get(b) for b in r["beats"])]
+    runs = select_runs(find_runs(beats, specs, vo_total), beats, specs, vo_total, settings, log)
+    runs = [r for r in runs if not all((fetched.get(b) or {}).get("source") == "map" for b in r["beats"])]
     if not runs:
         return 0
     if not hf_cmd():

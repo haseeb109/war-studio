@@ -254,3 +254,13 @@ def test_video_cost_adds_up_and_prices_voice_credits(tmp_path):
     assert s["voice_priced"] and abs(s["total_usd"] - (0.062 + 2.155 * 0.3)) < 1e-6
     assert "voice $0.646 (2155 ai33 credits)" in costs.line(s)
     assert costs.summary(tmp_path / "none", {})["total_usd"] == 0
+
+
+def test_more_overlays_money_percent_counts_years():
+    from warstudio.overlays import detect
+    assert detect("a deal worth $4.5 billion")["line1"] == "$4.5 BILLION"
+    assert detect("roughly one fifth of all the oil")["line1"] == "20%"
+    assert detect("Iran has 5,000 naval mines")["line2"] == "NAVAL MINES"
+    assert detect("In April 1988, after the mine")["line1"] == "APR 1988"
+    assert detect("since 2019 the ships")["type"] == "year"
+    assert detect("thirty miles off Djibouti") is None or detect("thirty miles off Djibouti")["kind"] != "label"

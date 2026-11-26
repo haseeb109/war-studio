@@ -33,6 +33,21 @@ _HHMM = r"(?:([01]?\d|2[0-3]):([0-5]\d)|([01]\d|2[0-3])([0-5]\d))(?!\d|[,.]\d|\s
 TIME_RE = re.compile(r"\b(?:at|by|until|around)\s+" + _HHMM + r"|\b" + _HHMM + r"\s*(?:local time|hours|zulu)", re.I)
 
 
+WORDNUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+           "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "hundred": 100}
+SCALE = r"(million|billion|thousand|hundred)"
+# "20 million barrels", "hundreds of fast boats", "3,000 troops", "twenty-one miles" handled by MEASURE first
+STAT_RE = re.compile(r"\b(" + NUM + r"|" + "|".join(WORDNUM) + r")(?:[\s-]+" + SCALE + r")?\s+((?:[a-z-]+\s){0,2}?(?:"
+                     r"barrels|troops|soldiers|sailors|marines|ships|warships|tankers|vessels|boats|aircraft|jets|"
+                     r"fighters|bombers|drones|missiles|rockets|mines|torpedoes|submarines|tanks|launchers|"
+                     r"people|casualties|bases|carriers|destroyers|frigates|helicopters|rounds|shells|warheads))\b", re.I)
+PCT_RE = re.compile(NUM + r"\s*(%|percent)", re.I)
+FRAC_RE = re.compile(r"\b(one|a) (fifth|quarter|third|half)\b(?= of)", re.I)
+MONEY_RE = re.compile(r"\$\s?" + NUM + r"(?:\s*(million|billion|trillion))?", re.I)
+YEAR_RE = re.compile(r"\b(?:in|since|by|of|back in)\s+((?:January|February|March|April|May|June|July|August|September|"
+                     r"October|November|December)\s+)?((?:19[4-9]|20[0-3])\d)\b", re.I)
+
+
 def _fmt(v):
     if v >= 100:
         return f"{v:,.0f}"
@@ -49,6 +64,8 @@ def detect(text):
         h, mi = g[0], g[1]
         return {"kind": "time", "line1": f"{int(h):02d}:{mi}", "line2": ""}
     m = MEASURE_RE.search(text)
+    if not m:
+        return detect_more(text)
     if m:
         raw, unit_txt = m.group(1), m.group(2).lower()
         val = float(raw.replace(",", ""))
@@ -63,25 +80,61 @@ def detect(text):
     return None
 
 
+def detect_more(text):
+    """Extra callouts (v1.7): money, percentages / fractions, counts of military things, years."""
+    m = MONEY_RE.search(text)
+    if m:
+        return {"kind": "measure", "line1": "$" + m.group(1) + ((" " + m.group(2).upper()) if m.group(2) else ""), "line2": "",
+                "type": "money"}
+    m = PCT_RE.search(text)
+    if m:
+        return {"kind": "measure", "line1": f"{m.group(1)}%", "line2": "", "type": "percent"}
+    m = FRAC_RE.search(text)
+    if m:
+        return {"kind": "measure", "line1": {"fifth": "20%", "quarter": "25%", "third": "33%", "half": "50%"}[m.group(2).lower()],
+                "line2": f"one {m.group(2).lower()}".upper(), "type": "percent"}
+    m = YEAR_RE.search(text)
+    if m:
+        return {"kind": "time", "line1": ((m.group(1) or "").strip()[:3].upper() + " " if m.group(1) else "") + m.group(2),
+                "line2": "", "type": "year"}
+    m = STAT_RE.search(text)
+    if m:
+        n = m.group(1)
+        if re.fullmatch(r"(19|20)\d\d", n) and not m.group(3):
+            return None
+        n = str(WORDNUM.get(n.lower(), n)) if not n[0].isdigit() else n
+        scale = (" " + m.group(3).upper()) if m.group(3) else ""
+        if n not in ("1",) or scale:
+            return {"kind": "measure", "line1": f"{n}{scale}", "line2": m.group(4).strip().upper()[:26], "type": "count"}
+    return None
+
+
 def plan(beats, specs, style):
     """Choose at most one overlay per beat, respecting the minimum gap. Returns {beat_id: overlay}."""
     oc = style["overlays"]
     spec_by_id = {s["id"]: s for s in specs}
-    out, last_end, seen_labels = {}, -99.0, set()
+    out, last_end, seen_labels = {}, -99.0, {}
+    per_min = float(oc.get("max_per_minute", 99))
+    times = []
     for b in beats:
         if b["start"] - last_end < oc["min_gap_seconds"]:
+            continue
+        if sum(1 for t in times if b["start"] - t < 60) >= per_min:
             continue
         ov = detect(b["text"])
         if not ov:
             lab = (spec_by_id.get(b["id"], {}).get("label") or "").strip()
-            if lab and lab.lower() not in seen_labels and len(lab) <= 32:
-                seen_labels.add(lab.lower())
+            again = float(oc.get("label_repeat_seconds", 0) or 0)       # a system label may come back much later
+            last = seen_labels.get(lab.lower())
+            if lab and len(lab) <= 32 and (last is None or (again and b["start"] - last >= again)):
+                seen_labels[lab.lower()] = b["start"]
                 ov = {"kind": "label", "line1": lab, "line2": ""}
         if ov:
             dur = min(b["end"] - b["start"], oc["max_hold_seconds"])
             ov["duration"] = round(max(0.8, dur), 3)
             out[b["id"]] = ov
             last_end = b["start"] + ov["duration"]
+            times.append(b["start"])
     return out
 
 

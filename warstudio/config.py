@@ -58,6 +58,9 @@ DEFAULT_SETTINGS = {
     "clip_max_uses": 3,
     "clip_reuse_gap_seconds": 60,
     "maps_enabled": True,
+    "maps_per_video": 0,
+    "map_min_seconds": 4.0,
+    "map_max_seconds": 5.0,
     "maps_parallel": 3,
     "use_library": True,         # match beats against the local shot library before searching online
     "library_dir": "",           # empty = <WarStudio>/library/shots

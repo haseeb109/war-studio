@@ -54,14 +54,14 @@ def test_run_step_cuts_one_clip_per_beat(tmp_path, monkeypatch):
     monkeypatch.setattr(maps, "CACHE_DIR", tmp_path / "cache")
     style = json.loads(Path("styles/beyond_military/style.json").read_text())
     fetched = {}
-    n = maps.run_step(tmp_path, BEATS, SPECS, 12.0, {}, {}, style, lambda *a, **k: None, fetched)
+    n = maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, fetched)
     assert n == 3 and sorted(fetched) == ["2", "3", "5"]
     assert sorted(calls) == [4.0, 6.0]                       # run length + pad
     assert all(v["source"] == "map" and Path(v["file"]).exists() for v in fetched.values())
     assert 3.0 < fetched["3"]["length"] < 3.8                # 2.5 s beat + pad
     # a second run reuses the clips and the saved plans
     monkeypatch.setattr(maps, "plan_runs", lambda *a, **k: (_ for _ in ()).throw(AssertionError("replanned")))
-    assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {}, {}, style, lambda *a, **k: None, {}) == 3
+    assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, {}) == 3
 
 
 def test_maps_off_or_no_renderer_changes_nothing(tmp_path, monkeypatch):
@@ -89,3 +89,20 @@ def test_plan_survives_empty_json_mode_reply(monkeypatch):
     assert sorted(plans) == list(range(11))
     assert calls.count(True) == 2 and calls.count(False) == 2      # 2 chunks, each: empty JSON mode -> plain retry
 
+
+
+def test_select_runs_rule_count_length_first_minute():
+    # 25 min video, a map moment every ~20 s, none in the first minute
+    beats, specs, t, i = [], [], 0.0, 0
+    while t < 1500:
+        beats.append({"id": i, "start": t, "end": t + 2.5, "text": f"b{i}"})
+        specs.append({"id": i, "footage_class": "map" if (i % 8 == 0 and t > 70) else "real", "scene": f"s{i}"})
+        t += 2.5
+        i += 1
+    runs = maps.find_runs(beats, specs, t)
+    got = maps.select_runs(runs, beats, specs, t, {})
+    assert 5 <= len(got) <= 6
+    assert got[0]["start"] < 60                                    # one map in the first minute (forced)
+    assert all(4.0 <= r["end"] - r["start"] <= 5.6 for r in got)
+    gaps = [b["start"] - a["start"] for a, b in zip(got, got[1:])]
+    assert min(gaps) > 120                                         # spread over the video
