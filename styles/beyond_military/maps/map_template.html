@@ -124,6 +124,7 @@ Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.
       draw();
       window.__timelines = window.__timelines || {};
       window.__timelines["root"] = tl;
+      if (location.search.includes("play")) tl.repeat(-1).repeatDelay(1).play();   // live preview in a browser
     });
   }
 });

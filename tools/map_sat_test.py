@@ -47,7 +47,7 @@ STYLES = {
 }
 
 
-def render(name, theme, token):
+def render(name, theme, token, page_only=False):
     work = ROOT / "map_sat_work" / name
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -61,6 +61,8 @@ def render(name, theme, token):
     page = (MAPS / "map_template.html").read_text().replace("__DUR__", f"{PLAN['duration']:.3f}") \
         .replace("__PLAN__", json.dumps(plan))
     (work / "index.html").write_text(page)
+    if page_only:
+        return None
     out = ROOT / f"map_sat_{name}.mp4"
     cmd = (["hyperframes"] if shutil.which("hyperframes") else ["npx", "-y", "hyperframes"]) + \
         ["render", str(work), "--format", "mp4", "-o", str(out), "--fps", "30", "--workers", "1"]
@@ -73,14 +75,38 @@ def render(name, theme, token):
     return out
 
 
+def preview(token):
+    """Live preview: the 4 styles open in Chrome tabs, looping. No render, ready in seconds."""
+    import functools
+    import http.server
+    import threading
+    import webbrowser
+    base = ROOT / "map_sat_work"
+    for n, th in STYLES.items():
+        render(n, th, token, page_only=True)
+    h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(base))
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8766), h)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    for n in STYLES:
+        webbrowser.open(f"http://127.0.0.1:8766/{n}/index.html?play")
+    print("4 tabs opened in your browser (order: " + ", ".join(STYLES) + "). Press Ctrl+C here when done.")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        srv.shutdown()
+
+
 def main():
     import os
-    token = (sys.argv[1] if len(sys.argv) > 1 else "") or os.environ.get("MAPBOX_TOKEN", "") or \
+    args = [a for a in sys.argv[1:] if a != "--preview"]
+    token = (args[0] if args else "") or os.environ.get("MAPBOX_TOKEN", "") or \
         load_keys().get("MAPBOX_TOKEN", "")
     token = token.strip().strip("'\"")
     if not token.startswith("pk."):
         print("MAPBOX_TOKEN missing: add it in Settings (it starts with pk.)")
         sys.exit(1)
+    if "--preview" in sys.argv:
+        return preview(token)
     outs = [o for n, th in STYLES.items() if (o := render(n, th, token))]
     if outs:
         lst = ROOT / "map_sat_work" / "list.txt"
