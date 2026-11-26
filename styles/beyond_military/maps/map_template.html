@@ -32,6 +32,7 @@ const TH = Object.assign({sea: "#081321", land: "#1b2430", border: "#4b5a6b", hl
   label: "#fff", accent: "#FFC400", font: '"Helvetica Neue",Arial,sans-serif', grid: "", scan: false, sweep: false,
   satellite: false, sat: {}, grain: 0, land_opacity: 1, hl_opacity: 0.75, tint: "", vignette: 0}, P.theme || {});
 document.documentElement.style.setProperty("--acc", TH.accent);
+try { maplibregl.setMaxParallelImageRequests(4); } catch (e) {}   // Mapbox answers 429 to bursts
 const map = new maplibregl.Map({
   container: "map", interactive: false, attributionControl: false, fadeDuration: 0,
   preserveDrawingBuffer: true, maxTileCacheSize: 6000, maxPitch: 70, center: P.from.center, zoom: P.from.zoom,
@@ -120,7 +121,7 @@ Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.
       map.once("idle", f); setTimeout(f, ms); map.triggerRepaint(); });
     async function warm() {                 // satellite: fly the whole camera path once so every tile is cached
       if (!(TH.satellite && P.token)) return;
-      for (let i = 0; i <= 24; i++) { state.t = D * i / 24; draw(); await idle(4000); }
+      for (let i = 0; i <= 12; i++) { state.t = D * i / 12; draw(); await idle(5000); }
       state.t = 0; draw(); await idle(4000);
     }
     warm().then(function ready() {          // the borders are loaded -> the timeline exists (HyperFrames waits for it)

@@ -88,7 +88,12 @@ def preview(token):
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)      # any free port
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    for n in STYLES:
+    only = [a for a in sys.argv[1:] if a in STYLES]
+    names = only or list(STYLES)
+    for k, n in enumerate(names):
+        if k:
+            time.sleep(25)                     # one tab at a time: Mapbox refuses (429) many tile requests at once
+        print(f"opening {n} ...")
         webbrowser.open(f"http://127.0.0.1:{port}/{n}/index.html?play&v={int(time.time())}")
     print("4 tabs opened in your browser (order: " + ", ".join(STYLES) + "). Press Ctrl+C here when done.")
     try:
@@ -99,7 +104,7 @@ def preview(token):
 
 def main():
     import os
-    args = [a for a in sys.argv[1:] if a != "--preview"]
+    args = [a for a in sys.argv[1:] if a != "--preview" and a not in STYLES]
     token = (args[0] if args else "") or os.environ.get("MAPBOX_TOKEN", "") or \
         load_keys().get("MAPBOX_TOKEN", "")
     token = token.strip().strip("'\"")
