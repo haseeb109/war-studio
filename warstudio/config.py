@@ -20,7 +20,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 FAVORITES_FILE = DATA_DIR / "favorites.json"
 
 KEY_NAMES = ["AI33_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "DVIDS_API_KEY", "PEXELS_API_KEY",
-             "PIXABAY_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY", "MAPBOX_TOKEN"]
+             "PIXABAY_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY", "MAPBOX_TOKEN", "ARCGIS_API_KEY"]
 
 # Brain (script -> shot specs). All speak the OpenAI chat-completions format.
 BRAIN_PRESETS = {

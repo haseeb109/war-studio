@@ -91,7 +91,7 @@ function draw() {
   });
   (P.countries || []).forEach(c => { const q = map.project(c.at); lab += `<div class="lbl" style="left:${q.x}px;top:${q.y}px;color:${TH.label};font-family:${TH.font}">${c.name}</div>`; });
   if (P.title) lab += `<div class="title" style="opacity:${Math.min(1, state.t / 0.3)}"><div class="bar"></div><div class="txt">${P.title}</div></div>`;
-  if (TH.satellite && P.token) lab += `<div style="position:absolute;right:18px;bottom:12px;font:500 15px ${TH.font};color:rgba(255,255,255,.75)">© Mapbox © OpenStreetMap</div>`;
+  if (TH.satellite && P.token) lab += `<div style="position:absolute;right:18px;bottom:12px;font:500 15px ${TH.font};color:rgba(255,255,255,.75)">${P.provider === "esri" ? "Esri, Maxar, Earthstar Geographics" : "© Mapbox © OpenStreetMap"}</div>`;
   document.getElementById("labels").innerHTML = lab;
 }
 const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res));
@@ -104,9 +104,11 @@ Promise.all([fetch("countries.geojson").then(r => r.json()), mapReady, document.
       if (TH.satellite && !P.token) warn("NO MAPBOX TOKEN - satellite is off");
       map.on("error", e => warn("SATELLITE NOT LOADING: " + ((e.error && (e.error.status || e.error.message)) || "error")));
     }
-    if (TH.satellite && P.token) {          // real satellite imagery (Mapbox), graded by the theme
-      map.addSource("sat", {type: "raster", tileSize: 512, maxzoom: 19,
-        tiles: ["https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=" + P.token]});
+    if (TH.satellite && P.token) {          // real satellite imagery (Esri World Imagery or Mapbox), graded by the theme
+      const esri = P.provider === "esri";
+      map.addSource("sat", {type: "raster", tileSize: esri ? (P.tile_size || 512) : 512, maxzoom: 19,
+        tiles: [esri ? "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/imagery/static/tile/{z}/{y}/{x}?token=" + P.token
+                     : "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90?access_token=" + P.token]});
       const S = Object.assign({"raster-saturation": 0, "raster-contrast": 0, "raster-brightness-max": 1, "raster-brightness-min": 0,
                                "raster-hue-rotate": 0}, TH.sat || {});
       map.addLayer({id: "sat", type: "raster", source: "sat", paint: Object.assign({"raster-fade-duration": 0}, S)});

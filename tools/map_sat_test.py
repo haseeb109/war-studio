@@ -54,7 +54,7 @@ def render(name, theme, token, page_only=False):
     for f in ("maplibre-gl.js", "maplibre-gl.css", "countries.geojson"):
         shutil.copy(MAPS / f, work / f)
     shutil.copy(HF / "gsap.min.js", work / "gsap.min.js")
-    plan = dict(PLAN, theme=theme, token=token)
+    plan = dict(PLAN, theme=theme, token=token, provider="mapbox" if token.startswith("pk.") else "esri")
     if theme.get("pitch"):
         plan["from"] = dict(PLAN["from"], pitch=0, bearing=0)
         plan["to"] = dict(PLAN["to"], pitch=55, bearing=-20)
@@ -108,8 +108,9 @@ def main():
     token = (args[0] if args else "") or os.environ.get("MAPBOX_TOKEN", "") or \
         load_keys().get("MAPBOX_TOKEN", "")
     token = token.strip().strip("'\"")
-    if not token.startswith("pk."):
-        print("MAPBOX_TOKEN missing: add it in Settings (it starts with pk.)")
+    token = token or load_keys().get("ARCGIS_API_KEY", "")
+    if not token:
+        print("No key: pass an ArcGIS API key (or a Mapbox pk. token), or add ARCGIS_API_KEY in Settings")
         sys.exit(1)
     if "--preview" in sys.argv:
         return preview(token)
