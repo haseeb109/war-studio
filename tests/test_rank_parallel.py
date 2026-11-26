@@ -50,7 +50,7 @@ def test_parallel_rerank_and_cooldown(tmp_path, monkeypatch):
     fake = FakeRR(lambda bid: {"scores": [9, 7, 5, 3, 1], "best": 1})
     monkeypatch.setattr(rank, "Reranker", lambda *a, **k: fake)
     logs = []
-    picks = rank.run_step(tmp_path, {}, {"rerank_concurrency": 6}, {"footage": {"same_source_cooldown_seconds": 9}},
+    picks = rank.run_step(tmp_path, {}, {"rerank_concurrency": 6, "clip_max_uses": 99, "clip_reuse_gap_seconds": 0}, {"footage": {"same_source_cooldown_seconds": 9}},
                           lambda m, **k: logs.append(m))
     assert fake.peak > 1                                   # several beats were reranked at the same time
     ids = [picks[str(i)]["id"] for i in range(12)]
@@ -66,7 +66,8 @@ def test_scene_reuse_only_when_reranked_clips_are_weak(tmp_path, monkeypatch):
     weak = FakeRR(lambda bid: {"scores": [9, 2, 2], "best": 1} if bid == 0 else {"scores": [4, 3, 2], "best": 1})
     monkeypatch.setattr(rank, "Reranker", lambda *a, **k: weak)
     # beat 0 picks c0; beats 1-2 only get weak scores (<6) -> reuse the strong in-scene clip
-    picks = rank.run_step(tmp_path, {}, {}, {"footage": {"same_source_cooldown_seconds": 90}}, lambda m, **k: None)
+    picks = rank.run_step(tmp_path, {}, {"clip_reuse_gap_seconds": 0}, {"footage": {"same_source_cooldown_seconds": 90}},
+                          lambda m, **k: None)
     assert picks["0"]["id"] == "c0" and picks["1"].get("scene_reuse") and picks["1"]["id"] == "c0"
 
 
@@ -75,7 +76,8 @@ def test_scene_reuse_capped_at_three(tmp_path, monkeypatch):
     monkeypatch.setattr(rank, "clip_scores", lambda s, t, ps: [0.3] * len(ps))
     fake = FakeRR(lambda bid: {"scores": [9, 8, 7], "best": 1})
     monkeypatch.setattr(rank, "Reranker", lambda *a, **k: fake)
-    picks = rank.run_step(tmp_path, {}, {}, {"footage": {"same_source_cooldown_seconds": 90}}, lambda m, **k: None)
+    picks = rank.run_step(tmp_path, {}, {"clip_reuse_gap_seconds": 0}, {"footage": {"same_source_cooldown_seconds": 90}},
+                          lambda m, **k: None)
     ids = [picks[str(i)]["id"] for i in range(5)]
     assert ids.count("c0") == 3 and ids[3] == "c1"
 
@@ -84,3 +86,27 @@ def test_cap_candidates_keeps_every_tier():
     cl = [{"id": str(i), "tier": "exact"} for i in range(30)] + [{"id": f"k{i}", "tier": "category"} for i in range(5)]
     kept = rank._cap_candidates(cl, 24, 4)
     assert len(kept) == 24 and sum(1 for c in kept if c["tier"] == "category") == 4
+
+
+def test_one_clip_max_three_times_and_far_apart(tmp_path, monkeypatch):
+    setup(tmp_path, 60, 8, scene=lambda i: "same")            # 3 min, one scene, only 8 clips, reranker loves c0
+    monkeypatch.setattr(rank, "clip_scores", lambda s, t, ps: [0.3] * len(ps))
+    fake = FakeRR(lambda bid: {"scores": [9, 8, 7, 6, 5], "best": 1})
+    monkeypatch.setattr(rank, "Reranker", lambda *a, **k: fake)
+    picks = rank.run_step(tmp_path, {}, {}, {"footage": {"same_source_cooldown_seconds": 9}}, lambda m, **k: None)
+    used = {}
+    for i in range(60):
+        p = picks[str(i)]
+        if p:
+            used.setdefault(p["id"], []).append(i * 3.0)
+    assert used and all(len(t) <= 3 for t in used.values())
+    assert all(b - a >= 9 for t in used.values() for a, b in zip(t, t[1:]))
+    # with plenty of fresh clips the full 60 s gap holds
+    setup(tmp_path / "x", 20, 24) if (tmp_path / "x").mkdir() is None else None
+    picks = rank.run_step(tmp_path / "x", {}, {}, {"footage": {"same_source_cooldown_seconds": 9}}, lambda m, **k: None)
+    seen = {}
+    for i in range(20):
+        p = picks[str(i)]
+        if p:
+            assert i * 3.0 - seen.get(p["id"], -999) >= 60
+            seen[p["id"]] = i * 3.0

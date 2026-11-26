@@ -298,6 +298,15 @@ def run_step(proj, keys, settings, style, log):
 
     # ---------------- phase B: walk the timeline, choose with cooldown + scene reuse (no network)
     recent = []       # (time, source_key, scene)
+    # user rule: one clip at most `clip_max_uses` times per video (3), each use at least `clip_reuse_gap_seconds`
+    # (60 s) after the last one - also inside a scene
+    max_uses = int(settings.get("clip_max_uses", 3) or 3)
+    gap = float(settings.get("clip_reuse_gap_seconds", 60))
+    total_uses, last_use = Counter(), {}
+
+    def rule_block(t, min_gap):
+        return {k for k, n in total_uses.items() if n >= max_uses} | \
+               {k for k, lt in last_use.items() if t - lt < min_gap}
     scene_picks = {}  # scene -> winners in that scene
     keep = ("source", "id", "title", "preview_url", "preview_file", "video_url", "duration", "page_url", "credit",
             "clip_score", "query", "tier", "scene_reuse", "license", "min_start", "lib_penalty")
@@ -309,12 +318,20 @@ def run_step(proj, keys, settings, style, log):
             p = picks[bid]
             if p:
                 recent.append((b["start"], _key(p), scene))
+                total_uses[_key(p)] += 1
+                last_use[_key(p)] = b["start"]
                 if scene:
                     scene_picks.setdefault(scene, []).append(p)
             continue
         blocked = {sk for t, sk, scn in recent if b["start"] - t < cool and not (scene and scn == scene)}
         scene_uses = Counter(_key(p) for p in scene_picks.get(scene, [])) if scene else Counter()
         blocked |= {sk for sk, n in scene_uses.items() if n >= SCENE_REUSE_MAX}     # max 3 uses inside one scene
+        cands_b = (pool.get(bid) or []) + (tops.get(bid) or [])
+        for g in (gap, min(gap, 20.0), min(gap, float(cool))):      # nothing fresh left: shorter gap, never > max uses
+            hard = rule_block(b["start"], g)
+            if not cands_b or not all(_key(c) in blocked | hard for c in cands_b):
+                break
+        blocked |= hard
         top = tops.get(bid) or []
         sc, by = reranked.get(bid, (None, None))
         scored = [(c, (sc[i] if sc and i < len(sc) else None)) for i, c in enumerate(top)]
@@ -325,7 +342,8 @@ def run_step(proj, keys, settings, style, log):
             uses = scene_uses
             seen = {_key(c) for c, _ in options}
             for p in reversed(scene_picks[scene]):
-                if _key(p) in seen or uses[_key(p)] >= SCENE_REUSE_MAX or not Path(p.get("preview_file") or "").exists():
+                if _key(p) in seen or _key(p) in blocked or uses[_key(p)] >= SCENE_REUSE_MAX or \
+                        not Path(p.get("preview_file") or "").exists():
                     continue
                 seen.add(_key(p))
                 reuse.append({x: v for x, v in p.items() if x not in ("alternates", "gemini_score", "rerank_by")}
@@ -361,9 +379,14 @@ def run_step(proj, keys, settings, style, log):
             winner["scene_reuse"] = True        # same clip again in this scene (fetch cuts another moment)
         picks[bid] = winner
         recent.append((b["start"], _key(winner), scene))
+        total_uses[_key(winner)] += 1
+        last_use[_key(winner)] = b["start"]
         if scene:
             scene_picks.setdefault(scene, []).append(winner)
     write_json(out_path, picks)
+    rep = Counter(_key(v) for v in picks.values() if v)
+    log(f"clip repeats: max {max(rep.values()) if rep else 0} uses of one clip (rule: {max_uses}, "
+        f"{gap:.0f} s apart); {sum(1 for n in rep.values() if n > 1)} clips used more than once")
 
     mix = Counter((v or {}).get("source", "none") for v in picks.values())
     by_ = Counter(("library" if (v or {}).get("source") == "library" else (v or {}).get("rerank_by", "clip"))
