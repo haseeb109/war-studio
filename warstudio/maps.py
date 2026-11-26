@@ -259,7 +259,10 @@ def build_page(plan, dur, work, theme):
 
 def render_one(work, out, fps, timeout=1200):
     cmd = hf_cmd() + ["render", str(work), "--format", "mp4", "-o", str(out), "--fps", str(fps), "--workers", "1"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    import os
+    # satellite pages fetch their tiles before the timeline exists: give HyperFrames time to wait for it
+    env = dict(os.environ, PRODUCER_RENDER_READY_TIMEOUT_MS="240000", PRODUCER_PLAYER_READY_TIMEOUT_MS="240000")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     if r.returncode != 0 or not Path(out).exists():
         Path(out).unlink(missing_ok=True)
         raise RuntimeError((r.stderr or r.stdout or "hyperframes failed").strip()[-300:])

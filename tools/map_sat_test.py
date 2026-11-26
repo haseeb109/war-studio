@@ -67,7 +67,9 @@ def render(name, theme, token, page_only=False):
     cmd = (["hyperframes"] if shutil.which("hyperframes") else ["npx", "-y", "hyperframes"]) + \
         ["render", str(work), "--format", "mp4", "-o", str(out), "--fps", "30", "--workers", "1"]
     t0 = time.time()
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    import os
+    env = dict(os.environ, PRODUCER_RENDER_READY_TIMEOUT_MS="240000", PRODUCER_PLAYER_READY_TIMEOUT_MS="240000")
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0 or not out.exists():
         print(f"{name}: FAILED\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}")
         return None
