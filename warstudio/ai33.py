@@ -8,6 +8,7 @@ Verified Nov 2026:
 The voice-list endpoint is not documented; list_voices() tries several and merges with BUILTIN_VOICES.
 """
 import json
+from pathlib import Path
 import time
 import urllib.error
 import urllib.request
@@ -116,6 +117,23 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
     wait = 0.0
     net_errors = 0
     retries = {}
+
+    def net_down(e):
+        """No internet / DNS / connection reset: wait (up to 30 min) until ai33 answers again, never fail fast."""
+        nonlocal net_errors
+        net_errors += 1
+        if net_errors == 1:
+            say(f"network problem talking to ai33 ({str(e)[:80]}); waiting for the connection, the video continues after")
+        t0 = time.time()
+        while time.time() - t0 < 1800:
+            sleep(min(60, 5 * net_errors))
+            try:
+                from .util import online
+                if online():
+                    return
+            except Exception:
+                return
+        raise Ai33Error(f"ai33 unreachable for 30 minutes: {e}")
     while queue or active:
         while queue and len(active) < cap and wait <= 0:
             out, text = queue[0]
@@ -127,11 +145,8 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
                     say(f"ai33 queue is full; waiting and lowering parallel voices to {new_cap}")
                 cap, wait, last_busy = new_cap, 10.0, time.time()
                 break
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                net_errors += 1
-                if net_errors > 8:
-                    raise Ai33Error(f"ai33 unreachable: {e}") from None
-                wait = 5.0
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                net_down(e)
                 break
             queue.pop(0)
             active[tid] = (out, text, retries.get(str(out), 0))
@@ -157,17 +172,21 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
                     queue.insert(0, (out, text))
                     continue
                 raise
-            except (urllib.error.URLError, TimeoutError, ConnectionError):
-                net_errors += 1
-                if net_errors > 8:
-                    raise
-                continue
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                net_down(e)
+                break
             st = d.get("status")
             if st == "done":
                 url = (d.get("metadata") or {}).get("audio_url")
                 if not url:
                     raise Ai33Error(f"ai33 task {tid} done without audio_url")
-                download(url, out)
+                try:
+                    download(url, out)
+                except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                    Path(out).unlink(missing_ok=True)
+                    net_down(e)                   # the task stays active: the same audio is downloaded again
+                    break
+                net_errors = 0
                 credits += d.get("credit_cost") or 0
                 del active[tid]
                 state.pop(str(out), None)

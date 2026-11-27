@@ -220,6 +220,8 @@ def test_gemini_model_auto_pick_and_404_switch(monkeypatch, tmp_path):
 
 
 def test_overlays_parallel_dedupe_and_fallback(tmp_path, monkeypatch):
+    from warstudio import overlays as _ov
+    monkeypatch.setattr(_ov, "OV_CACHE", tmp_path / "ovcache")
     calls = []
 
     def fake_webm(ov, style, out, work):
@@ -316,3 +318,10 @@ def test_stop_video_and_stop_all(tmp_path, monkeypatch):
     assert c.post("/api/jobs/stop_all").json()["stopped"] >= 2
     assert json.loads((tmp_path / ids[1] / "status.json").read_text())["state"] == "stopped"
     assert (tmp_path / ids[2] / "STOP").exists()
+
+
+def test_version_file_matches_pyproject():
+    import re as _re
+    from warstudio import ROOT, VERSION
+    py = _re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text()).group(1)
+    assert VERSION == py

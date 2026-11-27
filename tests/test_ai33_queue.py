@@ -161,3 +161,24 @@ def test_http_503_is_classified_busy(monkeypatch):
     except ai33.Ai33Busy:
         return
     raise AssertionError("503 server_busy must be Ai33Busy")
+
+
+def test_internet_drop_during_download_waits_and_continues(tmp_path, monkeypatch):
+    import urllib.error
+    from warstudio import util
+    fake = FakeAi33(limit=5)
+    monkeypatch.setattr(util, "online", lambda: True)
+    hits = {"n": 0}
+
+    def flaky(url, out):
+        if hits["n"] < 2:
+            hits["n"] += 1
+            raise urllib.error.URLError("[Errno 8] nodename nor servname provided")
+        Path(out).write_text(url)
+    clock = Clock()
+    monkeypatch.setattr(ai33.time, "time", clock.time)
+    monkeypatch.setattr(ai33, "_req", fake.req)
+    monkeypatch.setattr(ai33, "download", flaky)
+    items = [(tmp_path / f"{i}.mp3", f"line {i}") for i in range(3)]
+    ai33.tts_many("k", items, "v", concurrency=3, log=lambda m: None, sleep=clock.sleep)
+    assert all(p.exists() for p, _ in items) and hits["n"] == 2

@@ -15,6 +15,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import ROOT
+from .config import DATA_DIR
+
+OV_CACHE = DATA_DIR / "overlay_cache"     # rendered callouts shared between videos
+
 UNITS = [
     (r"nautical miles?", "mi", lambda v: (v * 1.852, "km")),
     (r"miles an hour|miles per hour|mph", "mph", lambda v: (v * 1.609, "km/h")),
@@ -221,6 +226,13 @@ def render_webm(ov, style, out_webm, work):
     return out_webm if r.returncode == 0 and Path(out_webm).exists() else None
 
 
+def _tpl_hash():
+    try:
+        return hashlib.md5((ROOT / "styles" / "beyond_military" / "hf" / "overlay_template.html").read_bytes()).hexdigest()[:8]
+    except Exception:
+        return "x"
+
+
 def render_all(overlay_plan, style, work, log, use_hf=True):
     """Render every planned overlay. Returns {beat_id: {'path', 'type': 'webm'|'png', **ov}}."""
     work = Path(work)
@@ -232,6 +244,9 @@ def render_all(overlay_plan, style, work, log, use_hf=True):
     for bid, ov in overlay_plan.items():
         key = hashlib.md5(json.dumps({k: ov[k] for k in ("kind", "line1", "line2", "duration")}, sort_keys=True).encode()).hexdigest()[:12]
         webm, png = work / f"ov_{key}.webm", work / f"ov_{key}.png"
+        shared = OV_CACHE / f"ov_{key}_{_tpl_hash()}.webm"          # same callout in an earlier video: copy it
+        if hf and not webm.exists() and shared.exists():
+            shutil.copy(shared, webm)
         if hf and webm.exists():
             out[bid] = dict(ov, path=str(webm), type="webm")
         elif not hf and png.exists():
@@ -258,6 +273,13 @@ def render_all(overlay_plan, style, work, log, use_hf=True):
         for bid, ov, webm, png in todo:
             if made.get(str(webm)):
                 out[bid] = dict(ov, path=str(webm), type="webm")
+                try:
+                    OV_CACHE.mkdir(parents=True, exist_ok=True)
+                    dst = OV_CACHE / f"{webm.stem}_{_tpl_hash()}.webm"
+                    if not dst.exists():
+                        shutil.copy(webm, dst)
+                except Exception:
+                    pass
     for bid, ov, webm, png in todo:
         if bid not in out:
             out[bid] = dict(ov, path=str(png if png.exists() else render_png(ov, style, png)), type="png")

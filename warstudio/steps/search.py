@@ -234,11 +234,16 @@ def library_first(specs, done, settings, log, project=None, only=False):
     vecs = clip_text_vecs(settings, texts)
     hits = weak = subs = 0
     for sp, v, t in zip(todo, vecs, texts):
-        res = idx.match(v, sp.get("entity") or "", t, k=8)
+        res = idx.match(v, sp.get("entity") or "", t, k=12)
         if only and sp.get("entity") and (not res or res[0]["clip_sim"] < floor):
             # the named system is not in the library: the closest shot of the same kind stands in
-            res = idx.match(v, "", t, k=8)
+            res = idx.match(v, "", t, k=12)
             subs += bool(res and res[0]["clip_sim"] >= floor)
+        elif only and sp.get("entity") and res:
+            # reserve: same-kind shots of other systems, used only when the named system's few shots are used up
+            # (one clip max 3 times per video); without them a long video about one aircraft ran out of footage
+            seen_ids = {r["id"] for r in res}
+            res = res + [dict(r, reserve=True) for r in idx.match(v, "", t, k=10) if r["id"] not in seen_ids]
         if res and res[0]["clip_sim"] >= floor:
             done[str(sp["id"])] = res
             hits += 1

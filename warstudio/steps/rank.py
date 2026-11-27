@@ -242,7 +242,7 @@ def run_step(proj, keys, settings, style, log):
             if any(a.lower() in title for a in sp.get("avoid") or [] if a):
                 s_ -= 0.05
             c["clip_score_raw"] = round(s_, 4)
-            c["clip_score"] = round(adjusted_score(c), 4)
+            c["clip_score"] = round(adjusted_score(c) - (1.0 if c.get("reserve") else 0.0), 4)   # reserve: last resort
         cl.sort(key=lambda c: -c["clip_score"])
         tops[bid] = diverse_top(cl, k)
 
