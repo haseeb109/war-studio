@@ -102,8 +102,6 @@ def test_search_parsers(monkeypatch):
                               "videos": {"large": {"url": "l.mp4"}, "medium": {"url": "m.mp4", "thumbnail": "t.jpg"}}}]}
         return {"results": [{"id": "video:123", "title": "F-15E", "thumbnail": {"url": "d.jpg"}}]}
     monkeypatch.setattr(search, "_cached_get", fake)
-    assert search.search_pexels("jet", "k", 5)[0]["video_url"] == "hd.mp4"
-    assert search.search_pixabay("jet", "k", 5)[0]["preview_url"] == "t.jpg"
     d = search.search_dvids("jet", "k", 5)[0]
     assert d["id"] == "video:123" and d["preview_url"] == "d.jpg"
 
@@ -176,10 +174,9 @@ def test_connect_brain_and_footage(monkeypatch):
                         if "balance" in url else R(401, {"error": {"message": "Invalid API key"}}))
     ok, msg = connect.test("DEEPSEEK_API_KEY", "sk-test")
     assert ok and "DeepSeek" in msg and "9.50 USD" in msg
-    ok, msg = connect.test("PEXELS_API_KEY", "bad")
-    assert not ok and "401" in msg and "Invalid API key" in msg
-    ok, msg = connect.test("PIXABAY_API_KEY", "")
-    assert not ok and "empty" in msg
+    ok, msg = connect.test("DVIDS_API_KEY", "bad")
+    assert not ok
+    assert "PEXELS_API_KEY" not in connect.KEYS if hasattr(connect, "KEYS") else True
 
 
 def test_gemini_model_auto_pick_and_404_switch(monkeypatch, tmp_path):

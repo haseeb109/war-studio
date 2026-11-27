@@ -99,88 +99,7 @@ def search_dvids(q, key, n, page=1):
     return out
 
 
-def search_pexels(q, key, n):
-    d = _cached_get("pexels", "https://api.pexels.com/videos/search",
-                    {"query": q, "per_page": n, "orientation": "landscape"}, headers={"Authorization": key})
-    out = []
-    for v in d.get("videos") or []:
-        files = [f for f in v.get("video_files") or [] if f.get("file_type") == "video/mp4" and f.get("width")]
-        files.sort(key=lambda f: (abs((f.get("height") or 0) - 1080), -(f.get("width") or 0)))
-        if not files:
-            continue
-        out.append({"source": "pexels", "id": str(v["id"]), "title": v.get("url", "").rstrip("/").split("/")[-1],
-                    "preview_url": v.get("image") or "", "video_url": files[0]["link"],
-                    "duration": num(v.get("duration")), "page_url": v.get("url") or "",
-                    "credit": f"{(v.get('user') or {}).get('name', '')} / Pexels"})
-    return out
-
-
-def search_pixabay(q, key, n):
-    # film only (no 3D/animation renders) and full-HD sources, closer to the cinematic Pexels look
-    d = _cached_get("pixabay", "https://pixabay.com/api/videos/", {"key": key, "q": q, "per_page": max(3, n),
-                                                                  "video_type": "film", "min_width": 1920})
-    out = []
-    for h in d.get("hits") or []:
-        vids = h.get("videos") or {}
-        best = vids.get("large") if (vids.get("large") or {}).get("url") else vids.get("medium") or {}
-        if not best.get("url"):
-            continue
-        thumb = (vids.get("medium") or {}).get("thumbnail") or best.get("thumbnail") or ""
-        out.append({"source": "pixabay", "id": str(h["id"]), "title": h.get("tags") or "",
-                    "preview_url": thumb, "video_url": best["url"], "duration": num(h.get("duration")),
-                    "page_url": h.get("pageURL") or "", "credit": f"{h.get('user', '')} / Pixabay"})
-    return out
-
-
-FREE_LICENSES = ("public domain", "pd-", "cc0", "cc-zero", "cc by", "cc-by")
-
-
-def commons_license_ok(lic, allow_sa=False):
-    l = (lic or "").lower().replace("-", " ")
-    if any(x in l for x in ("public domain", "pd ", "cc0", "cc zero")) or l.startswith("pd"):
-        return True
-    if "cc by" in l and "nc" not in l.split() and "nd" not in l.split():
-        return allow_sa or "sa" not in l.split()
-    return False
-
-
-def _strip_html(s):
-    import re
-    return re.sub(r"<[^>]+>", "", s or "").strip()
-
-
-def search_commons(q, key, n, allow_sa=False):
-    """Wikimedia Commons videos (no key). Only public domain, CC0 and CC BY (CC BY-SA if allowed in Settings).
-    Has Russian MoD (mil.ru, CC BY 4.0), Tasnim (Iran, CC BY 4.0), many DoD and national-forces clips."""
-    d = _cached_get("commons", "https://commons.wikimedia.org/w/api.php",
-                    {"action": "query", "format": "json", "generator": "search", "gsrnamespace": 6,
-                     "gsrsearch": f"filetype:video {q}", "gsrlimit": min(50, n * 2), "prop": "imageinfo",
-                     "iiprop": "url|size|mime|extmetadata", "iiurlwidth": 640},
-                    headers={"User-Agent": "WarStudio/0.5 (https://github.com/haseeb109/war-studio)"})
-    out = []
-    pages = sorted(((d.get("query") or {}).get("pages") or {}).values(), key=lambda p: p.get("index", 0))
-    for p in pages:
-        ii = (p.get("imageinfo") or [{}])[0]
-        mime = ii.get("mime") or ""
-        if not mime.startswith("video/") or not ii.get("url") or not ii.get("thumburl"):
-            continue
-        meta = ii.get("extmetadata") or {}
-        lic = (meta.get("LicenseShortName") or {}).get("value", "")
-        if not commons_license_ok(lic, allow_sa):
-            continue
-        artist = _strip_html((meta.get("Artist") or {}).get("value", "")) or "Wikimedia Commons"
-        title = (p.get("title") or "").replace("File:", "").rsplit(".", 1)[0]
-        out.append({"source": "commons", "id": str(p.get("pageid")), "title": title,
-                    "preview_url": ii["thumburl"], "video_url": ii["url"], "duration": num(ii.get("duration")),
-                    "page_url": ii.get("descriptionurl") or "", "credit": f"{artist} / Wikimedia Commons / {lic}",
-                    "license": lic})
-        if len(out) >= n:
-            break
-    return out
-
-
-SOURCES = {"dvids": ("DVIDS_API_KEY", search_dvids), "commons": (None, search_commons),
-           "pexels": ("PEXELS_API_KEY", search_pexels), "pixabay": ("PIXABAY_API_KEY", search_pixabay)}
+SOURCES = {"dvids": ("DVIDS_API_KEY", search_dvids)}      # online footage: DVIDS only (+ My Library)
 
 
 def source_ready(src, keys, settings=None):
@@ -192,9 +111,6 @@ def source_ready(src, keys, settings=None):
 
 def call_source(src, q, keys, n, settings=None):
     kname, fn = SOURCES[src]
-    if src == "commons":
-        allow = str((settings or {}).get("commons_allow_sharealike", False)).lower() in ("true", "1", "yes")
-        return fn(q, None, n, allow_sa=allow)
     return fn(q, keys[kname], n)
 
 
@@ -294,7 +210,7 @@ def run_step(proj, keys, settings, style, log):
     else:
         active = [s for s in SOURCES if source_ready(s, keys, settings)]
     if not active and not lib_hits:
-        raise RuntimeError("No footage source available (DVIDS / Pexels / Pixabay keys, or Wikimedia Commons) — check Settings")
+        raise RuntimeError("No footage source available (My Library is empty and no DVIDS key) — check Settings")
     log(f"searching footage on: {', '.join(active)}")
     import threading
     from concurrent.futures import ThreadPoolExecutor

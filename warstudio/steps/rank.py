@@ -315,7 +315,7 @@ def run_step(proj, keys, settings, style, log):
         o = c.get("origin")
         if o and not o.endswith(":"):
             return o, float(c.get("src_start") or 0), float(c.get("src_start") or 0) + float(c.get("src_len") or 0)
-        if c.get("source") in ("dvids", "commons", "pexels", "pixabay"):
+        if c.get("source") == "dvids":
             return f"{c['source']}:{c['id']}", 0.0, 1e9
         return None, 0, 0
 

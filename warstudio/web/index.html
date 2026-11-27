@@ -203,7 +203,7 @@
           <select id="styleSel"></select>
           <label>Footage sources</label>
           <div id="srcBox" class="chips">
-            <label class="chip"><input type="checkbox" class="srcChk" value="library" checked> My Library</label><label class="chip"><input type="checkbox" class="srcChk" value="dvids" checked> DVIDS</label><label class="chip"><input type="checkbox" class="srcChk" value="commons" checked> Wikimedia</label><label class="chip"><input type="checkbox" class="srcChk" value="pexels" checked> Pexels</label><label class="chip"><input type="checkbox" class="srcChk" value="pixabay" checked> Pixabay</label>
+            <label class="chip"><input type="checkbox" class="srcChk" value="library" checked> My Library</label><label class="chip"><input type="checkbox" class="srcChk" value="dvids" checked> DVIDS</label>
           </div>
           <label class="chip wide"><input type="checkbox" id="dummy"> Dry run &mdash; silent voice, no AI credits</label>
         </details>
@@ -504,7 +504,6 @@ async function loadStatus() {
   const KEYINFO = {AI33_API_KEY: "Voiceover · ai33.pro", DEEPSEEK_API_KEY: "Script planner · platform.deepseek.com",
     GROQ_API_KEY: "Clip rerank ONLY (not the script brain) · free key: console.groq.com/keys",
     GEMINI_API_KEY: "Clip rerank backup · aistudio.google.com/apikey", DVIDS_API_KEY: "Real military footage · api.dvidshub.net",
-    PEXELS_API_KEY: "Stock footage · pexels.com/api", PIXABAY_API_KEY: "Stock footage · pixabay.com/api/docs",
     HIVE_API_KEY: "Only if brain provider = Hive", CUSTOM_BRAIN_API_KEY: "Only if brain provider = Custom"};
   const brainKeys = ["DEEPSEEK_API_KEY", "HIVE_API_KEY", "CUSTOM_BRAIN_API_KEY"];
   const keyRow = k => `<div class="keyrow"><div class="lab"><b>${k}</b><span>${KEYINFO[k] || ""}</span></div>

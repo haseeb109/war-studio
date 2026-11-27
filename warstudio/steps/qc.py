@@ -32,8 +32,7 @@ def contact_sheet(proj, beats, picks, out, cols=6):
 
 
 def write_credits(proj, beats, fetched):
-    """credits.txt for the YouTube description. CC BY clips (Wikimedia Commons) must be attributed;
-    DVIDS asks for a courtesy credit. Pexels/Pixabay need none but are listed for completeness."""
+    """credits.txt for the YouTube description. DVIDS asks for a courtesy credit."""
     seen, lines = set(), []
     for b in beats:
         f = fetched.get(str(b["id"])) or {}
@@ -41,7 +40,7 @@ def write_credits(proj, beats, fetched):
         if not f or k in seen or f.get("source") == "user":
             continue
         seen.add(k)
-        lic = f.get("license") or {"pexels": "Pexels License", "pixabay": "Pixabay Content License"}.get(f.get("source"), "")
+        lic = f.get("license") or ""
         lines.append(f"- {f.get('title') or f.get('id')} | {f.get('credit', '')} | {lic} | {f.get('page_url', '')}")
     must = [l for l in lines if "cc by" in l.lower() or "cc-by" in l.lower()]
     txt = "FOOTAGE CREDITS\n"

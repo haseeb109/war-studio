@@ -242,8 +242,8 @@ def chk_keys():
     k = masked_keys()
     missing = [n for n, v in k.items() if not v]
     have = [n for n, v in k.items() if v]
-    if not any(k[x] for x in ("DVIDS_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY")):
-        return "fail", "no footage key (DVIDS / Pexels / Pixabay) — Settings tab"
+    if not k["DVIDS_API_KEY"]:
+        return "warn", "no DVIDS key — My Library only (Settings tab)"
     return ("warn" if missing else "ok"), f"set: {', '.join(have) or 'none'}" + (f"; missing: {', '.join(missing)}" if missing else "")
 
 
@@ -385,7 +385,7 @@ def chk_mini_run(c):
         from .pipeline import create_project, run_project
         from .util import read_json, duration
         keys = load_keys()
-        if not any(keys.get(k) for k in ("DVIDS_API_KEY", "PEXELS_API_KEY", "PIXABAY_API_KEY")):
+        if not keys.get("DVIDS_API_KEY"):
             return "warn", "skipped (no footage key)"
         script = ("At 17:14 local time, an F-15E Strike Eagle holds at 28,000 feet over the coast. "
                   "But unknown to the crew, a missile launches from the shore. The jet breaks hard and drops flares.")
@@ -449,7 +449,7 @@ def run_all(full=False, on_update=None):
     c.run("APIs", "Groq key (rerank only)", chk_groq)
     c.run("APIs", "Gemini key + model", chk_gemini)
     c.run("APIs", "rerank order", chk_reranker)
-    for src in ("dvids", "commons", "pexels", "pixabay"):
+    for src in ("dvids",):
         c.run("Footage", f"{src}", _source_check(c, src, full))
     if full:
         c.run("Full", "HyperFrames overlay render", chk_hyperframes(c))

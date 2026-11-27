@@ -14,7 +14,7 @@ from .util import UA
 
 SERVICES = {
     "AI33_API_KEY": "ai33", "DEEPSEEK_API_KEY": "deepseek", "HIVE_API_KEY": "hive", "CUSTOM_BRAIN_API_KEY": "custom",
-    "GROQ_API_KEY": "groq", "GEMINI_API_KEY": "gemini", "DVIDS_API_KEY": "dvids", "PEXELS_API_KEY": "pexels", "PIXABAY_API_KEY": "pixabay",
+    "GROQ_API_KEY": "groq", "GEMINI_API_KEY": "gemini", "DVIDS_API_KEY": "dvids",
 }
 
 
@@ -151,25 +151,6 @@ def test_gemini(key):
                   f"thinking {usage.get('thoughtsTokenCount', 0)} · test answer: {res.get('color', res)}")
 
 
-def test_pexels(key):
-    if not key:
-        return False, "PEXELS_API_KEY is empty"
-    r = _get("https://api.pexels.com/videos/search", params={"query": "fighter jet", "per_page": 1}, headers={"Authorization": key})
-    if r.status_code >= 400:
-        return False, "Pexels: " + _http_msg(r)
-    left = r.headers.get("X-Ratelimit-Remaining")
-    return True, f"search OK ({r.json().get('total_results', '?')} results for 'fighter jet')" + (f" · {left} requests left this month" if left else "")
-
-
-def test_pixabay(key):
-    if not key:
-        return False, "PIXABAY_API_KEY is empty"
-    r = _get("https://pixabay.com/api/videos/", params={"key": key, "q": "fighter jet", "per_page": 3})
-    if r.status_code >= 400:
-        return False, "Pixabay: " + _http_msg(r)
-    return True, f"search OK ({r.json().get('totalHits', '?')} results for 'fighter jet')"
-
-
 def test_dvids(key):
     if not key:
         return False, "DVIDS_API_KEY is empty"
@@ -199,8 +180,7 @@ def test(key_name, key=None):
     try:
         if svc in BRAIN_PRESETS:
             return test_brain(svc, key)
-        return {"ai33": test_ai33, "groq": test_groq, "gemini": test_gemini, "pexels": test_pexels,
-                "pixabay": test_pixabay, "dvids": test_dvids}[svc](key)
+        return {"ai33": test_ai33, "groq": test_groq, "gemini": test_gemini, "dvids": test_dvids}[svc](key)
     except httpx.HTTPError as e:
         return False, f"network error: {str(e)[:200]}"
     except Exception as e:

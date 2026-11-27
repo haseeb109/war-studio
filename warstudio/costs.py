@@ -2,7 +2,7 @@
 
 Parts: voice (ai33 credits -> $ with the price you set: ai33_usd_per_1k_credits), brain (DeepSeek tokens),
 rerank (Gemini tokens; Groq's free tier costs nothing), segment_check (vision model, only in vlm mode). Free:
-DVIDS / Commons / Pexels / Pixabay, the library (no rerank for library beats), CLIP, Apple Vision, ffmpeg, the
+DVIDS, the library (no rerank for library beats), CLIP, Apple Vision, ffmpeg, the
 sound design, and library learning (it captions with the beat's own visual line, no Gemini call).
 A step that runs again (Re-run from step) adds again - that money was really spent; a skipped step adds nothing.
 """

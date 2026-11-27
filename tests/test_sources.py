@@ -1,30 +1,10 @@
 from warstudio.steps import search, fetch, rank
 
 
-def test_commons_license_filter():
-    ok = search.commons_license_ok
-    assert ok("Public domain") and ok("CC0") and ok("CC BY 4.0") and ok("PD-USGov-Military")
-    assert not ok("CC BY-SA 4.0") and ok("CC BY-SA 4.0", allow_sa=True)
-    assert not ok("CC BY-NC 2.0") and not ok("CC BY-ND 3.0") and not ok("All rights reserved") and not ok("")
-
-
-def test_search_commons_parses_and_filters(monkeypatch):
-    def fake(source, url, params, headers=None, ttl=0):
-        assert params["iiurlwidth"] == 640 and "filetype:video" in params["gsrsearch"]
-        mk = lambda pid, idx, lic, mime="video/webm": {"pageid": pid, "index": idx, "title": f"File:Clip {pid}.webm",
-              "imageinfo": [{"url": f"https://u/{pid}.webm", "thumburl": f"https://t/{pid}.jpg", "mime": mime,
-                             "duration": 42.5, "descriptionurl": f"https://c/{pid}",
-                             "extmetadata": {"LicenseShortName": {"value": lic},
-                                             "Artist": {"value": "<a href='x'>mil.ru</a>"}}}]}
-        return {"query": {"pages": {"1": mk(1, 2, "CC BY 4.0"), "2": mk(2, 1, "CC BY-SA 3.0"),
-                                    "3": mk(3, 3, "CC BY-NC 2.0"), "4": mk(4, 4, "CC BY 4.0", "image/jpeg")}}}
-    monkeypatch.setattr(search, "_cached_get", fake)
-    res = search.search_commons("su-27", None, 10)
-    assert [r["id"] for r in res] == ["1"]
-    r = res[0]
-    assert r["source"] == "commons" and r["video_url"].endswith(".webm") and r["duration"] == 42.5
-    assert "mil.ru" in r["credit"] and "CC BY 4.0" in r["credit"] and r["license"] == "CC BY 4.0"
-    assert [x["id"] for x in search.search_commons("su-27", None, 10, allow_sa=True)] == ["2", "1"]
+def test_only_library_and_dvids_remain():
+    assert set(search.SOURCES) == {"dvids"}
+    for gone in ("search_pexels", "search_pixabay", "search_commons"):
+        assert not hasattr(search, gone)
 
 
 def test_dvids_asks_for_big_thumbnails(monkeypatch):
@@ -38,8 +18,6 @@ def test_dvids_asks_for_big_thumbnails(monkeypatch):
 
 
 def test_source_ready():
-    assert search.source_ready("commons", {}, {}) is True
-    assert search.source_ready("commons", {}, {"use_commons": "false"}) is False
     assert search.source_ready("dvids", {}, {}) is False
     assert search.source_ready("dvids", {"DVIDS_API_KEY": "x"}, {}) is True
 
@@ -81,12 +59,12 @@ def test_search_uses_only_sources_picked_for_the_video(tmp_path, monkeypatch):
     called.clear()
     (tmp_path / "candidates.json").unlink()
     search.run_step(tmp_path, keys, {"job_sources": ["dvids", "pexels"]}, style, lambda m, **k: logs.append(m))
-    assert set(called) == {"dvids"} and any("skipped: pexels" in m for m in logs)
-    # nothing picked = every available source (commons needs no key)
+    assert set(called) == {"dvids"}                       # old jobs that picked pexels: ignored
+    # nothing picked = every available source
     called.clear()
     (tmp_path / "candidates.json").unlink()
     search.run_step(tmp_path, keys, {}, style, lambda m, **k: None)
-    assert set(called) == {"dvids", "commons", "pixabay"}
+    assert set(called) == {"dvids"}
 
 
 def test_dvids_falls_back_to_plain_query_and_never_caches_empty(tmp_path, monkeypatch):

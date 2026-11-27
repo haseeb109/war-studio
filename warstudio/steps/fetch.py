@@ -91,7 +91,7 @@ RETRY_OFFSETS = 2      # other moments of the same long video to try when the cu
 
 def _long(p, need):
     d = num(p.get("duration"))
-    return d >= max(need * 3, 30) or (p.get("source") in ("dvids", "commons") and d > 60)
+    return d >= max(need * 3, 30) or (p.get("source") == "dvids" and d > 60)
 
 
 def run_step(proj, keys, style, log, settings=None):
