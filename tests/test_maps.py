@@ -187,3 +187,20 @@ def test_showreel_queues_every_combo(monkeypatch):
     assert d["queued"] == len(maps.CAMERAS) * len(maps.LABEL_FX) and 240 <= d["seconds"] <= 300
     assert {(j["camera"], j["label_fx"]) for j in q} == {(c, f) for c in maps.CAMERAS for f in maps.LABEL_FX}
     assert all(j["caption"] for j in q) and len({j["scene"] for j in q}) == len(maps.SCENES)
+
+
+def test_every_map_has_full_detail_and_a_fitting_camera():
+    bare = {"title": "STRAIT OF HORMUZ", "from": {"center": [56.0, 26.0], "zoom": 5}, "to": {"center": [56.3, 26.6], "zoom": 7},
+            "highlight": [], "countries": [], "points": [], "arrows": [], "rings": []}
+    p = maps.ensure_detail(bare)
+    assert p["points"] and p["rings"] and p["highlight"] and p["countries"]
+    assert p["highlight"][0]["iso"] in ("IRN", "OMN", "ARE")
+    two = dict(bare, points=[{"name": "A", "lon": 56.2, "lat": 27.1}, {"name": "B", "lon": 56.5, "lat": 26.4}])
+    assert maps.ensure_detail(two)["arrows"]
+    attack = maps.ensure_detail(dict(two, arrows=[{"from": [56.2, 27.1], "to": [56.5, 26.4]}]))
+    single = maps.ensure_detail(dict(bare, points=[{"name": "Port", "lon": 56.27, "lat": 27.18}]))
+    region = maps.ensure_detail(dict(bare, to={"center": [52, 27], "zoom": 4},
+                                     highlight=[{"iso": "IRN", "color": "#b3261e"}, {"iso": "SAU", "color": "#3a5a80"}]))
+    mv = maps.choose_moves([attack, single, region, attack, attack, single], seed="v")
+    assert mv[0] == "follow_arrow" and mv[1] in ("orbit", "push_in", "low_rise") and mv[2] in ("pull_back", "drift", "crane", "orbit")
+    assert all(mv.count(m) <= 2 for m in mv) and all(a != b for a, b in zip(mv, mv[1:]))

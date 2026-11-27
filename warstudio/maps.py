@@ -39,7 +39,7 @@ CAMERAS = ["follow_arrow", "point_hop", "orbit", "push_in", "pull_back", "pan_in
 LABEL_FX = ["drop", "type", "slide"]
 
 
-def camera(plan, k, seed=""):
+def camera(plan, k, seed="", move=None):
     """Every map gets its own camera move and label effect (k = its place in the video). Nothing starts from the
     whole map any more: every move begins near the place. Moves that need an arrow or two places are used only when
     the plan has them; the order is shuffled per video and the same move never comes twice in a row."""
@@ -50,7 +50,7 @@ def camera(plan, k, seed=""):
     rnd.shuffle(moves)
     ok = [m for m in moves if not (m == "follow_arrow" and not plan.get("arrows"))
           and not (m == "point_hop" and len(plan.get("points") or []) < 2)]
-    move = ok[k % len(ok)]
+    move = move if move in ok else ok[k % len(ok)]
     b = dict(plan["to"])
     z, (lon, lat) = b["zoom"], b["center"]
     span = 360.0 / (2 ** z) * 0.9                      # about one screen width at the end zoom, in degrees
@@ -80,6 +80,119 @@ def camera(plan, k, seed=""):
         v["zoom"] = max(1.0, min(9.5, v["zoom"]))
     return dict(plan, **{"from": f, "to": t, "camera": move, "cam": move, "ease": ease,
                          "label_fx": LABEL_FX[(k + rnd.randrange(3)) % 3]})
+
+
+def move_fit(plan):
+    """How well each camera move suits this map (higher = better; 0 = cannot be used)."""
+    pts, arr, rings = len(plan.get("points") or []), len(plan.get("arrows") or []), len(plan.get("rings") or [])
+    hl, z = len(plan.get("highlight") or []), float((plan.get("to") or {}).get("zoom", 6))
+    wide = z <= 5.0 or hl >= 2
+    one = pts <= 1 and not arr
+    return {
+        "follow_arrow": 3.0 if arr else 0,                          # an attack / route: ride along the arrow
+        "point_hop": (2.6 + (0.4 if not arr else 0)) if pts >= 2 else 0,   # several named places: hop between them
+        "orbit": 2.4 if rings else (1.6 if one else 1.0),           # a range / strike zone: circle around it
+        "push_in": 2.2 if one else (1.6 if rings else 1.2),         # one target: close in on it
+        "low_rise": 1.8 if one else 1.0,
+        "pull_back": 2.2 if wide else 1.0,                          # a region / several countries: reveal the context
+        "crane": 1.8 if wide else 0.9,
+        "drift": 2.0 if z <= 4.5 else 1.0,                          # big sea / ocean areas: slow drift across
+        "pan_in": 1.6 if arr else 1.3,
+        "side_slide": 1.6 if (arr or pts >= 2) else 1.1,
+    }
+
+
+def choose_moves(plans, seed=""):
+    """One move per map, in video order: the best-suited move wins, a move is used at most twice per video and
+    never twice in a row, so every map looks different but each one gets a move that fits what it shows."""
+    import hashlib
+    import random
+    rnd = random.Random(hashlib.md5(("moves" + str(seed)).encode()).hexdigest())
+    uses, out, last = {}, [], None
+    for plan in plans:
+        fit = move_fit(plan)
+        best = max((m for m in CAMERAS if fit[m] > 0 and uses.get(m, 0) < 2 and m != last),
+                   key=lambda m: fit[m] - 1.2 * uses.get(m, 0) + rnd.random() * 0.3, default=None)
+        best = best or max(CAMERAS, key=lambda m: fit[m])
+        uses[best] = uses.get(best, 0) + 1
+        out.append(best)
+        last = best
+    return out
+
+
+_GEO = None
+
+
+def _country_at(lon, lat):
+    """(iso, name, label point) of the country under a point, from the bundled countries.geojson."""
+    global _GEO
+    if _GEO is None:
+        try:
+            _GEO = json.loads((MAPS_DIR / "countries.geojson").read_text())["features"]
+        except Exception:
+            _GEO = []
+
+    def inside(ring):
+        c, n = False, len(ring)
+        for i in range(n):
+            (x1, y1), (x2, y2) = ring[i][:2], ring[i - 1][:2]
+            if (y1 > lat) != (y2 > lat) and lon < (x2 - x1) * (lat - y1) / ((y2 - y1) or 1e-12) + x1:
+                c = not c
+        return c
+    for f in _GEO:
+        g = f.get("geometry") or {}
+        polys = [g["coordinates"]] if g.get("type") == "Polygon" else g.get("coordinates", []) if g.get("type") == "MultiPolygon" else []
+        for poly in polys:
+            if poly and inside(poly[0]):
+                xs, ys = [p[0] for p in poly[0]], [p[1] for p in poly[0]]
+                return f["properties"].get("iso"), f["properties"].get("name", ""), [(min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2]
+    best, bd = None, 9.0                                     # at sea (a strait, a port's water): the nearest coast
+    for f in _GEO:
+        g = f.get("geometry") or {}
+        polys = [g["coordinates"]] if g.get("type") == "Polygon" else g.get("coordinates", []) if g.get("type") == "MultiPolygon" else []
+        for poly in polys:
+            for x, y in (q[:2] for q in poly[0]):
+                d = (x - lon) ** 2 + (y - lat) ** 2
+                if d < bd:
+                    bd, best = d, (f, poly[0])
+    if best:
+        f, ring = best
+        xs, ys = [q[0] for q in ring], [q[1] for q in ring]
+        return f["properties"].get("iso"), f["properties"].get("name", ""), [(min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2]
+    return None, None, None
+
+
+def ensure_detail(plan, colors=None):
+    """Every map always carries the full detailing: a pin with its label, a highlighted country with its name,
+    a range ring on the main place, and an arrow when there are two places. Things the brain left out are added."""
+    colors = colors or {"enemy": "#b3261e", "ally": "#3a5a80", "neutral": "#4b5a6b"}
+    p = json.loads(json.dumps(plan))
+    for k in ("highlight", "countries", "points", "arrows", "rings"):
+        p[k] = list(p.get(k) or [])
+    lon, lat = p["to"]["center"]
+    if not p["points"]:
+        nm = (p.get("title") or "TARGET").title()
+        if p["arrows"]:
+            lon, lat = p["arrows"][0]["to"]
+        p["points"].append({"name": nm[:24], "lon": round(lon, 3), "lat": round(lat, 3)})
+    main = p["points"][0]
+    if not p["highlight"] or not p["countries"]:
+        iso, name, at = _country_at(main["lon"], main["lat"])
+        if not iso:
+            iso, name, at = _country_at(lon, lat)
+        if iso and not p["highlight"]:
+            p["highlight"].append({"iso": iso, "color": colors.get("enemy")})
+        if name and not p["countries"]:
+            p["countries"].append({"name": name.upper()[:22], "at": at})
+    if not p["arrows"] and len(p["points"]) >= 2:
+        a, b = p["points"][0], p["points"][1]
+        p["arrows"].append({"from": [a["lon"], a["lat"]], "to": [b["lon"], b["lat"]]})
+    if not p["rings"]:
+        z = float(p["to"].get("zoom", 6))
+        km = max(5, min(1500, round(360.0 / (2 ** z) * 111 * 0.12)))   # ~1/8 of the screen width
+        tgt = p["arrows"][0]["to"] if p["arrows"] else [main["lon"], main["lat"]]
+        p["rings"].append({"lon": tgt[0], "lat": tgt[1], "km": km})
+    return p
 
 
 def tilt(plan, theme):
@@ -183,7 +296,9 @@ Fields:
 - countries: max 5 country names to print, "at" inside the country.
 - points: max 4 cities, bases, islands or straits that are named.
 - arrows: max 3, movement / attack / route. rings: max 2, a range or distance that is named.
-Only draw what the narration says; use an empty list when nothing fits. Every run must be in the reply."""
+Every map MUST have: at least one point (the place the narration is about), at least one highlighted country,
+its name in countries, and a ring around the main place or the strike / threat zone; add arrows for any attack,
+movement or route. Use real places from the narration. Every run must be in the reply."""
 
 
 def _iso_set():
@@ -331,7 +446,7 @@ def validate_plan(p, isos, colors):
             ll, km = _ll([r.get("lon"), r.get("lat")]), _num(r.get("km"), 5, 3000)
             if ll and km:
                 out["rings"].append({"lon": ll[0], "lat": ll[1], "km": round(km)})
-    return out
+    return ensure_detail(out, colors)
 
 
 def plan_runs(runs, title, settings, keys, log):
@@ -482,6 +597,8 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
     if not jobs:
         log("maps: no usable map plan - map beats use stock footage")
         return 0
+    moves = choose_moves([plans[i] for i, _, _ in jobs], seed=proj.name)
+    log("maps: camera per map (by what it shows): " + ", ".join(moves))
     conc = max(1, int(settings.get("maps_parallel", 3) or 3))
     log(f"maps: rendering {len(jobs)} map clip(s) for {sum(len(r['beats']) for _, r, _ in jobs)} beats, {conc} at a time")
     lock, done, n_beats, cached = threading.Lock(), [0], [0], [0]
@@ -493,7 +610,7 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
         clip = mdir / f"run_{r['beats'][0]}_{len(r['beats'])}.mp4"
         try:
             pos = [j for j, _, _ in jobs].index(i)
-            if not clip.exists() and render_cached(camera(dict(plan, **extra), pos, seed=proj.name), dur, theme, clip,
+            if not clip.exists() and render_cached(camera(dict(plan, **extra), pos, seed=proj.name, move=moves[pos]), dur, theme, clip,
                                                     mdir / f"work_{i}", fps):
                 with lock:
                     cached[0] += 1

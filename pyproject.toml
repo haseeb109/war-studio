@@ -1,6 +1,6 @@
 [project]
 name = "warstudio"
-version = "1.20.0"
+version = "1.21.0"
 description = "WarStudio: script in, synced military documentary video out."
 requires-python = ">=3.12,<3.13"
 dependencies = [
