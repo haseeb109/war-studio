@@ -118,7 +118,8 @@ SCENES = {
 }
 
 
-def render_test(style, settings, keys, out, scene="red_sea", move="random", label_fx="", dur=5.0, text="", log=print):
+def render_test(style, settings, keys, out, scene="red_sea", move="random", label_fx="", dur=5.0, text="", log=print,
+                caption=False):
     """Maps Test playground: one clip with a chosen place, camera move and label effect. Returns what was used."""
     import random as _r
     if not hf_cmd():
@@ -140,6 +141,10 @@ def render_test(style, settings, keys, out, scene="red_sea", move="random", labe
             raise RuntimeError(f"camera move '{move}' needs an arrow / two places that this map does not have")
     if label_fx:
         plan["label_fx"] = label_fx
+    if caption:                                        # showreel: say on screen which combo this is
+        nice = lambda x: x.replace("_", " ").upper()
+        plan["caption"] = [f"CAMERA: {nice(plan['cam'])}", f"LABELS: {nice(plan['label_fx'])}",
+                           "EFFECTS: GLOW · PING · FLOW · RADAR"]
     work = build_page(plan, float(dur), Path(out).parent / ("work_" + Path(out).stem), theme)
     render_one(work, out, style["canvas"]["fps"], timeout=600)
     shutil.rmtree(work, ignore_errors=True)

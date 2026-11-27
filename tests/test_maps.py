@@ -172,3 +172,18 @@ def test_all_moves_grid_video(tmp_path, monkeypatch):
     assert (tmp_path / "b-ALL.mp4").exists(), server.MAPTEST["error"]
     meta = json.loads((tmp_path / "b-ALL.json").read_text())
     assert meta["grid"] == maps.CAMERAS
+
+
+def test_showreel_queues_every_combo(monkeypatch):
+    from fastapi.testclient import TestClient
+    from warstudio import server
+
+    class Held(list):
+        def __bool__(self):
+            return False
+    monkeypatch.setattr(server, "MAPTEST", {"queue": Held(), "running": [], "error": "", "batches": {}})
+    d = TestClient(server.app).post("/api/maptest/showreel").json()
+    q = server.MAPTEST["queue"]
+    assert d["queued"] == len(maps.CAMERAS) * len(maps.LABEL_FX) and 240 <= d["seconds"] <= 300
+    assert {(j["camera"], j["label_fx"]) for j in q} == {(c, f) for c in maps.CAMERAS for f in maps.LABEL_FX}
+    assert all(j["caption"] for j in q) and len({j["scene"] for j in q}) == len(maps.SCENES)

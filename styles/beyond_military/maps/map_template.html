@@ -169,6 +169,8 @@ function draw() {
   });
   (P.countries || []).forEach((c, ci) => { const q = cpos[ci]; lab += `<div class="lbl" style="left:${q.x}px;top:${q.y}px;color:${TH.label};font-family:${FONT};opacity:${cz}">${c.name}</div>`; });
   if (P.title) lab += `<div class="title" style="opacity:${clamp(t / 0.3)}"><div class="bar"></div><div class="txt">${P.title}</div></div>`;
+  if (P.caption) lab += `<div style="position:absolute;left:50%;bottom:44px;transform:translateX(-50%);display:flex;gap:14px;font:700 28px ${FONT};letter-spacing:1px;white-space:nowrap">` +
+    P.caption.map((c, i) => `<span style="padding:10px 18px;border-radius:8px;background:${i === 0 ? TH.accent : "rgba(0,0,0,.72)"};color:${i === 0 ? "#000" : "#fff"};border:2px solid ${TH.accent}">${c}</span>`).join("") + `</div>`;
   document.getElementById("labels").innerHTML = lab;
 }
 const mapReady = new Promise(res => map.loaded() ? res() : map.once("load", res));

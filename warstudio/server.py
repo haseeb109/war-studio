@@ -375,7 +375,7 @@ def _maptest_worker():
         t0 = time.time()
         try:
             info = maps.render_test(load_style("beyond_military"), load_settings(), load_keys(), out, job["scene"],
-                                    job["camera"], job["label_fx"], job["seconds"], job["text"])
+                                    job["camera"], job["label_fx"], job["seconds"], job["text"], caption=job.get("caption", False))
             info.update(scene=job["scene"], text=job["text"][:120], render_seconds=round(time.time() - t0),
                         created=time.time(), file=out.name, order=job["order"])
             write_json(MAPTEST_DIR / f"{name}.json", info)
@@ -392,7 +392,7 @@ def _maptest_worker():
                     b.setdefault("title", info.get("title", ""))
                 last = b["left"] == 0 and b["grid"]
         if b is not None and last:
-            _maptest_grid(job["batch"])
+            (_maptest_reel if b.get("reel") else _maptest_grid)(job["batch"])
 
 
 for _ in range(max(1, int(load_settings().get("maptest_parallel", 3) or 3))):   # several clips render at the same time
@@ -416,6 +416,51 @@ def maptest_add(m: MapTest):
             MAPTEST["queue"].append({"batch": batch, "order": i, "scene": m.scene, "camera": mv, "label_fx": m.label_fx,
                                      "seconds": max(4.0, min(5.0, float(m.seconds))), "text": m.text})
     return {"ok": True, "queued": len(moves), "batch": batch}
+
+
+def _maptest_reel(batch):
+    """Showreel: every clip of the batch one after another in one long video."""
+    import subprocess
+    b = MAPTEST["batches"].get(batch) or {}
+    clips = sorted([c for c in b.get("done", []) if (MAPTEST_DIR / c["file"]).exists()], key=lambda c: c["order"])
+    if not clips:
+        return
+    lst = MAPTEST_DIR / f"{batch}-list.txt"
+    lst.write_text("".join(f"file '{(MAPTEST_DIR / c['file']).as_posix()}'\n" for c in clips))
+    name = f"{batch}-SHOWREEL.mp4"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c:v", "libx264",
+                        "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", "30", str(MAPTEST_DIR / name)],
+                       check=True, capture_output=True, timeout=1800)
+        write_json(MAPTEST_DIR / f"{batch}-SHOWREEL.json", {
+            "camera": "SHOWREEL", "grid": [f"{c['camera']}+{c['label_fx']}" for c in clips], "label_fx": "all",
+            "title": f"{len(clips)} combos", "scene": "all places", "seconds": round(sum(c["seconds"] for c in clips)),
+            "render_seconds": round(time.time() - b["t0"]), "created": time.time(), "file": name, "text": ""})
+        for c in clips:                                    # the single combo clips are inside the reel now
+            (MAPTEST_DIR / c["file"]).unlink(missing_ok=True)
+            (MAPTEST_DIR / c["file"].replace(".mp4", ".json")).unlink(missing_ok=True)
+    except Exception as e:
+        MAPTEST["error"] = f"showreel: {str(e)[:200]}"
+    lst.unlink(missing_ok=True)
+
+
+@app.post("/api/maptest/showreel")
+def maptest_showreel():
+    """4-5 min video with every camera move x every label effect (30 combos x 9 s), places taking turns, each with
+    its combo written on top."""
+    from . import maps
+    batch = time.strftime("%Y%m%d-%H%M%S") + "-reel"
+    scenes = list(maps.SCENES)
+    jobs = []
+    for i, mv in enumerate(maps.CAMERAS):
+        for j, fx in enumerate(maps.LABEL_FX):
+            n = len(jobs)
+            jobs.append({"batch": batch, "order": n, "scene": scenes[n % len(scenes)], "camera": mv, "label_fx": fx,
+                         "seconds": 9.0, "text": "", "caption": True})
+    with MAPTEST_LOCK:
+        MAPTEST["batches"][batch] = {"left": len(jobs), "done": [], "grid": False, "reel": True, "t0": time.time()}
+        MAPTEST["queue"].extend(jobs)
+    return {"ok": True, "queued": len(jobs), "seconds": 9 * len(jobs)}
 
 
 @app.get("/api/maptest")

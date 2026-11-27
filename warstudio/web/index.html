@@ -368,6 +368,7 @@
         <div><label>Label effect</label><select id="mtFx" style="width:auto"></select></div>
         <div><label>Length</label><select id="mtSec" style="width:auto"><option value="4">4 s</option><option value="4.5">4.5 s</option><option value="5" selected>5 s</option></select></div>
         <button class="btn" id="mtGo">Render</button>
+        <button class="btn ghost" id="mtReel">Build showreel (4-5 min, all combos)</button>
         <button class="btn ghost" id="mtClear">Clear all</button>
       </div>
       <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Or test with a script sentence (the brain plans the map, like in a real video)</summary>
@@ -456,6 +457,11 @@ $("#mtGo").onclick = async () => {
                                          seconds: +$("#mtSec").value, text: $("#mtText").value});
     toast(`${d.queued} test clip(s) queued`); loadMapTest(false);
   } catch (e) { toast(e.message, 6000); }
+};
+$("#mtReel").onclick = async () => {
+  if (!confirm("Render a 4-5 minute showreel with every camera move x every label effect (30 clips)? It takes a while (roughly 30-60 min).")) return;
+  try { const d = await api("/api/maptest/showreel", {}); toast(`Showreel queued: ${d.queued} clips, ${Math.round(d.seconds / 60 * 10) / 10} min`, 6000); loadMapTest(false); }
+  catch (e) { toast(e.message, 6000); }
 };
 $("#mtClear").onclick = async () => { if (!confirm("Delete all test clips?")) return; await api("/api/maptest/clear", {}); MT_SEEN = "x"; loadMapTest(false); };
 
