@@ -126,3 +126,31 @@ def test_strict_window_skips_runs_that_cannot_fit():
     specs = [{"id": i, "footage_class": "map", "scene": str(i)} for i in range(4)]
     got = maps.select_runs(maps.find_runs(beats, specs, 13.5), beats, specs, 13.5, {"maps_per_video": 3})
     assert got and all(4.0 <= r["end"] - r["start"] <= 5.0 for r in got)
+
+
+def test_maps_test_playground_api(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from warstudio import server
+    monkeypatch.setattr(server, "MAPTEST_DIR", tmp_path)
+    c = TestClient(server.app)
+    class Held(list):                                  # the background renderer sees an empty queue
+        def __bool__(self):
+            return False
+    monkeypatch.setattr(server, "MAPTEST", {"queue": Held(), "running": None, "error": ""})
+    d = c.get("/api/maptest").json()
+    assert "follow_arrow" in d["cameras"] and "hormuz" in d["scenes"]
+    r = c.post("/api/maptest", json={"scene": "hormuz", "camera": "all", "seconds": 9})
+    assert r.json()["queued"] == len(maps.CAMERAS)
+    assert all(j["seconds"] == 5.0 for j in server.MAPTEST["queue"])       # length kept inside 4-5 s
+    server.MAPTEST["queue"].clear()
+    assert c.post("/api/maptest", json={"scene": "nowhere"}).status_code == 400
+
+
+def test_every_test_scene_builds_with_every_move(tmp_path):
+    style = json.loads(Path("styles/beyond_military/style.json").read_text())
+    for name, sc in maps.SCENES.items():
+        for k in range(len(maps.CAMERAS)):
+            p = maps.camera(json.loads(json.dumps(sc)), k, seed=name)
+            assert p["cam"] in maps.CAMERAS and p["label_fx"] in maps.LABEL_FX
+    maps.build_page(maps.camera(maps.SCENES["midway"], 0, "x"), 5.0, tmp_path / "w", style["maps"]["theme"])
+    assert (tmp_path / "w" / "index.html").exists()

@@ -96,6 +96,56 @@ SAMPLE = {"title": "RED SEA", "from": {"center": [44.0, 17.0], "zoom": 3.2}, "to
           "arrows": [{"from": [42.95, 14.80], "to": [42.55, 14.55]}], "rings": [{"lon": 42.95, "lat": 14.80, "km": 25}]}
 
 
+SCENES = {
+    "red_sea": dict(SAMPLE, title="RED SEA", to={"center": [43.2, 13.7], "zoom": 6.6},
+                    arrows=[{"from": [42.95, 14.8], "to": [43.4, 12.65]}],
+                    points=[{"name": "Hodeidah", "lon": 42.95, "lat": 14.8}, {"name": "Bab-el-Mandeb", "lon": 43.4, "lat": 12.6}],
+                    rings=[{"lon": 43.4, "lat": 12.6, "km": 60}]),
+    "hormuz": {"title": "STRAIT OF HORMUZ", "from": {"center": [55.5, 26.5], "zoom": 5}, "to": {"center": [56.3, 26.4], "zoom": 7.4},
+               "highlight": [{"iso": "IRN", "color": "#b3261e"}, {"iso": "OMN", "color": "#3a5a80"}, {"iso": "ARE", "color": "#3a5a80"}],
+               "countries": [{"name": "IRAN", "at": [57.5, 27.6]}, {"name": "OMAN", "at": [56.9, 24.6]}],
+               "points": [{"name": "Bandar Abbas", "lon": 56.27, "lat": 27.18}, {"name": "Musandam", "lon": 56.25, "lat": 26.2}],
+               "arrows": [{"from": [56.27, 27.18], "to": [56.5, 26.45]}], "rings": [{"lon": 56.27, "lat": 27.18, "km": 70}]},
+    "falklands": {"title": "FALKLAND ISLANDS", "from": {"center": [-62, -51.5], "zoom": 4}, "to": {"center": [-62.5, -51.7], "zoom": 6.2},
+                  "highlight": [{"iso": "ARG", "color": "#b3261e"}, {"iso": "FLK", "color": "#3a5a80"}],
+                  "countries": [{"name": "ARGENTINA", "at": [-68.5, -49.5]}, {"name": "FALKLANDS", "at": [-59.5, -51.3]}],
+                  "points": [{"name": "Rio Grande", "lon": -67.7, "lat": -53.8}, {"name": "Stanley", "lon": -57.85, "lat": -51.69}],
+                  "arrows": [{"from": [-67.7, -53.8], "to": [-58.2, -51.8]}], "rings": [{"lon": -57.85, "lat": -51.69, "km": 120}]},
+    "midway": {"title": "PACIFIC OCEAN", "from": {"center": [-170, 25], "zoom": 3.5}, "to": {"center": [-172, 26], "zoom": 4.6},
+               "highlight": [], "countries": [],
+               "points": [{"name": "Midway Atoll", "lon": -177.37, "lat": 28.21}, {"name": "Pearl Harbor", "lon": -157.95, "lat": 21.35}],
+               "arrows": [{"from": [-157.95, 21.35], "to": [-176.8, 28.0]}], "rings": [{"lon": -177.37, "lat": 28.21, "km": 300}]},
+}
+
+
+def render_test(style, settings, keys, out, scene="red_sea", move="random", label_fx="", dur=5.0, text="", log=print):
+    """Maps Test playground: one clip with a chosen place, camera move and label effect. Returns what was used."""
+    import random as _r
+    if not hf_cmd():
+        raise RuntimeError("HyperFrames/npx not found")
+    theme, _ = map_look(style, settings, keys)
+    if text.strip():                                   # the real path: the brain plans the map from a sentence
+        plans, _usd = plan_runs([{"text": text.strip()}], "", settings, keys, log)
+        if not plans:
+            raise RuntimeError("the brain gave no usable map plan for this text")
+        base = plans[0]
+    else:
+        base = json.loads(json.dumps(SCENES.get(scene) or SCENES["red_sea"]))
+    seed = str(_r.random())
+    if move in ("", "random"):
+        plan = camera(base, _r.randrange(20), seed)
+    else:
+        plan = next((camera(base, k, seed) for k in range(40) if camera(base, k, seed)["cam"] == move), None)
+        if plan is None:
+            raise RuntimeError(f"camera move '{move}' needs an arrow / two places that this map does not have")
+    if label_fx:
+        plan["label_fx"] = label_fx
+    work = build_page(plan, float(dur), Path(out).parent / ("work_" + Path(out).stem), theme)
+    render_one(work, out, style["canvas"]["fps"], timeout=600)
+    shutil.rmtree(work, ignore_errors=True)
+    return {"camera": plan["cam"], "label_fx": plan["label_fx"], "title": plan.get("title", ""), "seconds": float(dur)}
+
+
 def render_sample(style, settings, keys, out):
     """Settings > Render test map: a 6 s Red Sea clip with the current map look."""
     if not hf_cmd():

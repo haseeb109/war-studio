@@ -309,6 +309,90 @@ def map_sample_file():
     return FileResponse(p, media_type="video/mp4")
 
 
+MAPTEST = {"queue": [], "running": None, "error": ""}
+MAPTEST_DIR = DATA_DIR / "map_tests"
+
+
+class MapTest(BaseModel):
+    scene: str = "red_sea"
+    camera: str = "random"            # a move name, "random", or "all" (one clip per move)
+    label_fx: str = ""
+    seconds: float = 5.0
+    text: str = ""                    # optional: a script sentence, planned by the brain
+
+
+def _maptest_worker():
+    from . import maps
+    from .config import load_style
+    while True:
+        if not MAPTEST["queue"]:
+            time.sleep(1)
+            continue
+        job = MAPTEST["queue"].pop(0)
+        MAPTEST["running"] = job
+        MAPTEST_DIR.mkdir(parents=True, exist_ok=True)
+        name = time.strftime("%Y%m%d-%H%M%S") + f"-{job['camera']}"
+        out = MAPTEST_DIR / f"{name}.mp4"
+        t0 = time.time()
+        try:
+            info = maps.render_test(load_style("beyond_military"), load_settings(), load_keys(), out, job["scene"],
+                                    job["camera"], job["label_fx"], job["seconds"], job["text"])
+            info.update(scene=job["scene"], text=job["text"][:120], render_seconds=round(time.time() - t0),
+                        created=time.time(), file=out.name)
+            write_json(MAPTEST_DIR / f"{name}.json", info)
+            MAPTEST["error"] = ""
+        except Exception as e:
+            MAPTEST["error"] = f"{job['camera']}: {str(e)[:300]}"
+        MAPTEST["running"] = None
+
+
+threading.Thread(target=_maptest_worker, daemon=True).start()
+
+
+@app.post("/api/maptest")
+def maptest_add(m: MapTest):
+    from . import maps
+    if m.scene not in maps.SCENES and not m.text.strip():
+        raise HTTPException(400, "unknown place")
+    moves = maps.CAMERAS if m.camera == "all" else [m.camera]
+    for mv in moves:
+        if mv != "random" and mv not in maps.CAMERAS:
+            raise HTTPException(400, f"unknown camera move {mv}")
+        MAPTEST["queue"].append({"scene": m.scene, "camera": mv, "label_fx": m.label_fx,
+                                 "seconds": max(4.0, min(5.0, float(m.seconds))), "text": m.text})
+    return {"ok": True, "queued": len(moves)}
+
+
+@app.get("/api/maptest")
+def maptest_state():
+    from . import maps
+    MAPTEST_DIR.mkdir(parents=True, exist_ok=True)
+    clips = []
+    for j in sorted(MAPTEST_DIR.glob("*.json"), reverse=True)[:40]:
+        d = read_json(j, {}) or {}
+        if (MAPTEST_DIR / d.get("file", "")).exists():
+            clips.append(d)
+    return {"queue": len(MAPTEST["queue"]), "running": MAPTEST["running"], "error": MAPTEST["error"], "clips": clips,
+            "cameras": maps.CAMERAS, "label_fx": maps.LABEL_FX, "scenes": list(maps.SCENES)}
+
+
+@app.get("/api/maptest/file/{name}")
+def maptest_file(name: str):
+    p = MAPTEST_DIR / Path(name).name
+    if not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p, media_type="video/mp4")
+
+
+@app.post("/api/maptest/clear")
+def maptest_clear():
+    MAPTEST["queue"].clear()
+    for p in MAPTEST_DIR.glob("*"):
+        if p.is_file():
+            p.unlink()
+    return {"ok": True}
+
+
 @app.get("/api/music")
 def music_list():
     """Background music files the user put into assets/music (one is chosen per video)."""

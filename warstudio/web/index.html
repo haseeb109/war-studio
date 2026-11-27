@@ -123,6 +123,7 @@
     <button data-tab="jobs">Videos</button>
     <button data-tab="voices">Voices</button>
     <button data-tab="library">Library</button>
+    <button data-tab="maps">Maps Test</button>
     <button data-tab="settings">Settings</button>
     <button data-tab="check">System Check</button>
   </nav>
@@ -356,6 +357,27 @@
     </div>
   </section>
 
+  <!-- MAPS TEST PLAYGROUND -->
+  <section id="tab-maps" class="hidden">
+    <div class="card">
+      <h2 style="margin-top:0">Maps Test</h2>
+      <p class="muted" style="margin-top:-6px">Render only map animations, without making a video. Each clip takes about a minute.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <div><label>Place</label><select id="mtScene" style="width:auto"></select></div>
+        <div><label>Camera move</label><select id="mtCam" style="width:auto"></select></div>
+        <div><label>Label effect</label><select id="mtFx" style="width:auto"></select></div>
+        <div><label>Length</label><select id="mtSec" style="width:auto"><option value="4">4 s</option><option value="4.5">4.5 s</option><option value="5" selected>5 s</option></select></div>
+        <button class="btn" id="mtGo">Render</button>
+        <button class="btn ghost" id="mtClear">Clear all</button>
+      </div>
+      <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Or test with a script sentence (the brain plans the map, like in a real video)</summary>
+        <textarea id="mtText" rows="2" placeholder="Iranian fast boats raced out of Bandar Abbas toward the tankers in the Strait of Hormuz." style="margin-top:8px"></textarea>
+      </details>
+      <div id="mtStatus" class="muted" style="margin-top:12px"></div>
+    </div>
+    <div id="mtClips" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:14px;margin-top:14px"></div>
+  </section>
+
   <!-- SYSTEM CHECK -->
   <section id="tab-check" class="hidden">
     <div class="card">
@@ -397,7 +419,45 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "check") pollDiag();
   if (b.dataset.tab === "library") loadLibrary();
   if (b.dataset.tab === "dash") loadDash();
+  if (b.dataset.tab === "maps") loadMapTest(true);
 });
+
+let MT_TIMER = null, MT_SEEN = "";
+async function loadMapTest(first) {
+  let d;
+  try { d = await api("/api/maptest"); } catch (e) { return; }
+  if (first || !$("#mtScene").options.length) {
+    const nice = s => s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    $("#mtScene").innerHTML = d.scenes.map(s => `<option value="${s}">${nice(s)}</option>`).join("");
+    $("#mtCam").innerHTML = `<option value="random">Random</option><option value="all">All moves (one clip each)</option>` +
+      d.cameras.map(c => `<option value="${c}">${nice(c)}</option>`).join("");
+    $("#mtFx").innerHTML = `<option value="">Random</option>` + d.label_fx.map(f => `<option value="${f}">${nice(f)}</option>`).join("");
+  }
+  const busy = d.running || d.queue;
+  $("#mtStatus").innerHTML = (busy ? `Rendering <b>${esc((d.running || {}).camera || "…")}</b>` + (d.queue ? ` · ${d.queue} more waiting` : "") : "Idle") +
+    (d.error ? ` <span style="color:var(--red)">· last error: ${esc(d.error)}</span>` : "");
+  const sig = d.clips.map(c => c.file).join(",");
+  if (sig !== MT_SEEN) {
+    MT_SEEN = sig;
+    $("#mtClips").innerHTML = d.clips.map(c => `<div class="card" style="margin:0;padding:10px">
+      <video src="/api/maptest/file/${encodeURIComponent(c.file)}" controls loop muted playsinline style="width:100%;border-radius:8px"></video>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <span class="tag">${esc(c.camera)}</span><span class="tag">label: ${esc(c.label_fx)}</span>
+        <span class="tag">${esc(c.title || c.scene)}</span><span class="tag">${c.seconds}s</span><span class="tag">⏱ ${c.render_seconds}s render</span></div>
+      ${c.text ? `<div class="muted" style="font-size:12px;margin-top:4px">"${esc(c.text)}"</div>` : ""}</div>`).join("") ||
+      '<p class="muted">No test clips yet.</p>';
+  }
+  clearTimeout(MT_TIMER);
+  if (!document.querySelector("#tab-maps").classList.contains("hidden")) MT_TIMER = setTimeout(() => loadMapTest(false), busy ? 3000 : 8000);
+}
+$("#mtGo").onclick = async () => {
+  try {
+    const d = await api("/api/maptest", {scene: $("#mtScene").value, camera: $("#mtCam").value, label_fx: $("#mtFx").value,
+                                         seconds: +$("#mtSec").value, text: $("#mtText").value});
+    toast(`${d.queued} test clip(s) queued`); loadMapTest(false);
+  } catch (e) { toast(e.message, 6000); }
+};
+$("#mtClear").onclick = async () => { if (!confirm("Delete all test clips?")) return; await api("/api/maptest/clear", {}); MT_SEEN = "x"; loadMapTest(false); };
 
 async function loadStatus() {
   STATUS = await api("/api/status");
