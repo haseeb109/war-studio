@@ -131,3 +131,33 @@ def test_concurrency_recovers_after_queue_clears(tmp_path, monkeypatch):
     assert all(p.exists() for p, _ in items) and fake.submits == 80
     assert any("lowering" in m for m in logs)
     assert any("back to 4" in m for m in logs)
+
+
+def test_polling_503_server_busy_is_a_wait_not_an_error(tmp_path, monkeypatch):
+    fake = FakeAi33(limit=5)
+    real_req = fake.req
+    hits = {"n": 0}
+
+    def flaky(key, path, data=None, timeout=60):
+        if data is None and hits["n"] < 3:                # the first polls answer 503 server_busy
+            hits["n"] += 1
+            raise ai33.Ai33Busy('ai33 busy (HTTP 503): {"code":"server_busy"}')
+        return real_req(key, path, data, timeout)
+    fake.req = flaky
+    items = [(tmp_path / f"{i}.mp3", f"line {i}") for i in range(4)]
+    run(fake, tmp_path, items, monkeypatch)
+    assert all(p.exists() for p, _ in items)
+
+
+def test_http_503_is_classified_busy(monkeypatch):
+    import io
+    import urllib.error
+
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 503, "x", {}, io.BytesIO(b'{"code":"server_busy"}'))
+    monkeypatch.setattr(ai33.urllib.request, "urlopen", boom)
+    try:
+        ai33._req("k", "/v1/task/x")
+    except ai33.Ai33Busy:
+        return
+    raise AssertionError("503 server_busy must be Ai33Busy")

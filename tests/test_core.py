@@ -264,3 +264,28 @@ def test_more_overlays_money_percent_counts_years():
     assert detect("In April 1988, after the mine")["line1"] == "APR 1988"
     assert detect("since 2019 the ships")["type"] == "year"
     assert detect("thirty miles off Djibouti") is None or detect("thirty miles off Djibouti")["kind"] != "label"
+
+
+def test_voice_lock_one_video_at_a_time():
+    from warstudio import pipeline
+    assert pipeline.VOICE_LOCK.acquire(blocking=False)
+    assert not pipeline.VOICE_LOCK.acquire(blocking=False)
+    pipeline.VOICE_LOCK.release()
+
+
+def test_schedule_a_video(tmp_path, monkeypatch):
+    import time as _t
+    from fastapi.testclient import TestClient
+    from warstudio import server, pipeline, config
+    monkeypatch.setattr(server, "PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(pipeline, "PROJECTS_DIR", tmp_path)
+    put = []
+    monkeypatch.setattr(server.JOBS, "put", lambda x: put.append(x))
+    c = TestClient(server.app)
+    r = c.post("/api/jobs", json={"title": "T", "script": "Hello there. One more line.", "voice_id": "v",
+                                  "dummy": True, "sources": ["library"], "start_in_minutes": 60})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["scheduled_for"] > _t.time() + 3500 and not put
+    st = json.loads((tmp_path / d["id"] / "status.json").read_text())
+    assert st["state"] == "scheduled"

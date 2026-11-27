@@ -55,7 +55,7 @@ def _req(key, path, data=None, timeout=60):
             return json.loads(r.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="ignore")[:300]
-        if e.code == 429 or "queue_limit" in body:
+        if e.code in (429, 502, 503, 504) or "queue_limit" in body or "server_busy" in body or "busy" in body.lower():
             raise Ai33Busy(f"ai33 busy (HTTP {e.code}): {body}") from None
         raise Ai33Error(f"ai33 {path} HTTP {e.code}: {body}") from None
 
@@ -147,7 +147,7 @@ def tts_many(key, items, voice_id, model_id="eleven_multilingual_v2", concurrenc
             try:
                 d = poll(key, tid)
             except Ai33Busy:
-                wait = 5.0
+                wait = 10.0                       # ai33 polling busy (503): wait, then poll the same tasks again
                 break
             except Ai33Error as e:
                 if "HTTP 404" in str(e) or "HTTP 400" in str(e):     # stale task id from an old run

@@ -1,6 +1,7 @@
 """Runs the 8 steps in order. Every step writes its own JSON, so a failed run resumes where it stopped."""
 import json
 import re
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -64,6 +65,9 @@ class Logger:
             write_json(self.proj / "status.json", self.status)
 
 
+VOICE_LOCK = threading.Lock()      # ai33 cannot take several videos at once: voices are made one video at a time
+
+
 def run_project(proj, from_step=None):
     proj = Path(proj)
     meta = read_json(proj / "project.json")
@@ -94,7 +98,17 @@ def run_project(proj, from_step=None):
             log.set(step=name, progress=0, step_started=ts)
             log(f"--- step: {name}")
             if name == "voice":
-                vo.run_step(proj, keys, settings, meta["voice_id"], log, dummy=dummy)
+                if (proj / "vo.json").exists() or dummy:
+                    vo.run_step(proj, keys, settings, meta["voice_id"], log, dummy=dummy)
+                else:
+                    if not VOICE_LOCK.acquire(blocking=False):
+                        log("voice: waiting - another video is generating its voice (one at a time for ai33)")
+                        log.set(step="voice (waiting)")
+                        VOICE_LOCK.acquire()
+                    try:
+                        vo.run_step(proj, keys, settings, meta["voice_id"], log, dummy=dummy)
+                    finally:
+                        VOICE_LOCK.release()
             elif name == "beats":
                 beats.run_step(proj, style, log)
             elif name == "specs":

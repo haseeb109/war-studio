@@ -179,6 +179,12 @@
       </div>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="dummy" style="width:auto"> Dry run (silent voice, no AI credits) &mdash; tests footage + render only</label>
       <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
+        <select id="startWhen" style="width:auto">
+          <option value="0">Start now</option><option value="10">In 10 minutes</option><option value="30">In 30 minutes</option>
+          <option value="60">In 1 hour</option><option value="120">In 2 hours</option><option value="240">In 4 hours</option>
+          <option value="at">At a time…</option>
+        </select>
+        <input type="datetime-local" id="startAt" class="hidden" style="width:auto">
         <button class="btn" id="startBtn">Start production</button>
         <span class="muted" id="startMsg"></span>
       </div>
@@ -483,13 +489,22 @@ $("#script").oninput = () => {
     c.onchange = () => { try { localStorage.setItem("ws_sources", JSON.stringify([...document.querySelectorAll(".srcChk:checked")].map(x => x.value))); } catch (e) {} };
   });
 })();
+$("#startWhen").onchange = () => $("#startAt").classList.toggle("hidden", $("#startWhen").value !== "at");
 $("#startBtn").onclick = async () => {
   try {
     const sources = [...document.querySelectorAll(".srcChk:checked")].map(x => x.value);
     if (!sources.length) { toast("Pick at least one footage source"); return; }
     $("#startBtn").disabled = true;
-    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources, bgm: $("#musicSel").value});
-    $("#startMsg").textContent = "Queued: " + d.id;
+    const when = $("#startWhen").value;
+    let start_in_minutes = 0, start_at = 0;
+    if (when === "at") {
+      if (!$("#startAt").value) { toast("Pick the start time"); return; }
+      start_at = new Date($("#startAt").value).getTime() / 1000;
+      if (start_at < Date.now() / 1000) { toast("That time has already passed"); return; }
+    } else start_in_minutes = +when;
+    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources, bgm: $("#musicSel").value, start_in_minutes, start_at});
+    $("#startMsg").textContent = d.scheduled_for ? "Scheduled for " + new Date(d.scheduled_for * 1000).toLocaleString() : "Queued: " + d.id;
+    if (d.scheduled_for) { toast("Scheduled: " + new Date(d.scheduled_for * 1000).toLocaleTimeString(), 5000); $("#title").value = ""; $("#script").value = ""; await loadJobs(); return; }
     document.querySelector('nav button[data-tab="jobs"]').click(); await loadJobs(); openJob(d.id);
   } catch (e) { toast(e.message, 6000); } finally { $("#startBtn").disabled = false; }
 };
@@ -716,6 +731,7 @@ function renderLib() {
        ${running ? `<div class="bar" style="width:160px;margin-top:8px"><i style="width:${Math.round((j.progress || 0) * 100)}%"></i></div>` : ""}</div>`;
     const tags = [];
     if (j.state === "error") tags.push('<span class="tag bad">failed</span>');
+    if (j.state === "scheduled") tags.push(`<span class="tag warn">⏰ ${new Date(j.scheduled_for * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})}</span>`);
     if (running) tags.push('<span class="tag warn">processing</span>');
     if (j.has_final) tags.push(j.review === "reviewed" ? '<span class="tag ok">reviewed</span>' : j.review === "edited" ? '<span class="tag warn">edited</span>' : '<span class="tag">not reviewed</span>');
     if (j.no_footage) tags.push(`<span class="tag bad">${j.no_footage} no footage</span>`);

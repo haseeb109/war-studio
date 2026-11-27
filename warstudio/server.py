@@ -56,7 +56,29 @@ def _run_apply(proj):
         log.set(state="error", error=str(e)[:500])
 
 
-threading.Thread(target=_worker, daemon=True).start()
+# several videos run at once (footage, maps, render in parallel); the voice step itself is one video at a time
+for _ in range(max(1, int(load_settings().get("parallel_videos", 2) or 2))):
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _scheduler():
+    """Videos scheduled for later: queue each one when its time comes (survives restarts: it lives in status.json)."""
+    while True:
+        now = time.time()
+        for st_path in PROJECTS_DIR.glob("*/status.json"):
+            try:
+                st = read_json(st_path, {}) or {}
+                if st.get("state") == "scheduled" and float(st.get("scheduled_for") or 0) <= now:
+                    st["state"] = "queued"
+                    st.setdefault("log", []).append(time.strftime("%H:%M:%S") + "  scheduled time reached: starting")
+                    write_json(st_path, st)
+                    JOBS.put((st_path.parent, None))
+            except Exception:
+                pass
+        time.sleep(15)
+
+
+threading.Thread(target=_scheduler, daemon=True).start()
 
 
 # ---------------------------------------------------------------- shot library
@@ -197,6 +219,8 @@ class NewJob(BaseModel):
     dummy: bool = False
     sources: list[str] = []          # footage sources for this video only; empty = all available
     bgm: str = ""                    # file name in assets/music; "" = no music
+    start_in_minutes: float = 0      # schedule: start this many minutes from now (0 = now)
+    start_at: float = 0              # schedule: start at this unix time (overrides start_in_minutes)
 
 
 class Resume(BaseModel):
@@ -383,6 +407,13 @@ def new_job(j: NewJob):
         raise HTTPException(400, f"music file not found in assets/music: {j.bgm}")
     proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources,
                           "auto" if j.bgm == "auto" else (Path(j.bgm).name if j.bgm else ""))
+    when = j.start_at or (time.time() + j.start_in_minutes * 60 if j.start_in_minutes > 0 else 0)
+    if when and when > time.time() + 30:
+        st = read_json(proj / "status.json", {}) or {}
+        st.update(state="scheduled", scheduled_for=when, step=None)
+        st.setdefault("log", []).append("scheduled to start at " + time.strftime("%Y-%m-%d %H:%M", time.localtime(when)))
+        write_json(proj / "status.json", st)
+        return {"id": proj.name, "scheduled_for": when}
     JOBS.put((proj, None))
     return {"id": proj.name}
 
@@ -402,6 +433,7 @@ def jobs():
                     "created": meta.get("created"), "seconds": qc.get("video_seconds"), "style": meta.get("style"),
                     "no_footage": len(qc.get("beats_without_footage", [])), "review": rv.get("state", "unreviewed"),
                     "total_seconds": st.get("total_seconds"), "run_started": st.get("run_started"),
+                    "scheduled_for": st.get("scheduled_for") if st.get("state") == "scheduled" else None,
                     "dummy": meta.get("dummy", False), "cost": costs.summary(p.parent, settings),
                     "mix": qc.get("source_mix")})
     return out
