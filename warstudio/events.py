@@ -138,7 +138,7 @@ def label_png(path, tag, text="", accent=(255, 196, 0)):
     x, y = 60, H - 130
     tw = d.textlength(tag, font=f1)
     d.rounded_rectangle([x, y, x + tw + 36, y + 56], 8, fill=accent + (255,))
-    d.text((x + 18, y + 9), tag, font=f1, fill=(0, 0, 0, 255))
+    d.text((x + 18, y + 9), tag, font=f1, fill=(0, 0, 0, 255) if sum(accent) > 400 else (255, 255, 255, 255))
     if text:
         cw = d.textlength(text, font=f2)
         d.rounded_rectangle([x + tw + 48, y + 6, x + tw + 48 + cw + 30, y + 50], 8, fill=(0, 0, 0, 190))
@@ -216,47 +216,73 @@ def headline_boxes(img_path, words):
 
 
 def render_card(img_path, dur, out, fps, label, words):
-    """News screenshot as an article card: dark background, the shot slowly pushing in, a yellow highlighter
-    wiping across the headline and the line the narration talks about."""
-    from PIL import Image, ImageDraw, ImageFilter
+    """News screenshot, documentary style: the same screenshot blurred and darkened fills the frame, the sharp
+    screenshot sits on top as a card (rounded corners, thin light border, soft shadow), slowly pushing in and drifting
+    up; a yellow marker wipes across the headline and then the line the narration talks about (multiply blend, so the
+    text stays black like a real highlighter); a red REPORT tag + source bottom left."""
+    from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
     src = Image.open(img_path).convert("RGB")
     boxes = headline_boxes(img_path, words)
-    maxw, maxh = 1500, 830
-    s = min(maxw / src.width, maxh / src.height)
+    s = min(1380 / src.width, 760 / src.height)
     card = src.resize((max(1, int(src.width * s)), max(1, int(src.height * s))), Image.LANCZOS)
     boxes = [(x * s, y * s, w * s, h * s) for x, y, w, h in boxes]
-    tag = label_png(Path(out).with_suffix(".png"), "REPORT", label)
-    lab = Image.open(tag).convert("RGBA")
+    cw, ch = card.size
+    bg = src.copy()
+    k0 = max(W / bg.width, H / bg.height) * 1.15
+    bg = bg.resize((int(bg.width * k0), int(bg.height * k0)), Image.LANCZOS)
+    bg = bg.crop(((bg.width - W) // 2, (bg.height - H) // 2, (bg.width - W) // 2 + W, (bg.height - H) // 2 + H))
+    bg = ImageEnhance.Brightness(bg.filter(ImageFilter.GaussianBlur(40))).enhance(0.32)
+    mask = Image.new("L", (cw, ch), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, cw - 1, ch - 1], 18, fill=255)
+    pad = 70
+    shadow = Image.new("L", (cw + 2 * pad, ch + 2 * pad), 0)
+    ImageDraw.Draw(shadow).rounded_rectangle([pad, pad + 14, pad + cw, pad + ch + 14], 18, fill=200)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(28))
+    lab = Image.open(label_png(Path(out).with_suffix(".png"), "REPORT", label, accent=(210, 30, 40))).convert("RGBA")
+    Path(out).with_suffix(".png").unlink(missing_ok=True)
+    # the marker: drawn once per line at full width, revealed left to right
+    marks = []
+    for x, y, w, h in boxes:
+        m = Image.new("L", (cw, ch), 0)
+        ImageDraw.Draw(m).rounded_rectangle([x - h * 0.25, y - h * 0.12, x + w + h * 0.25, y + h * 1.12], int(h * 0.2), fill=255)
+        marks.append((m, x - h * 0.25, w + h * 0.5))
+    yellow = Image.new("RGB", (cw, ch), (255, 222, 40))
     n = max(1, int(dur * fps))
     p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
                           "-r", str(fps), "-i", "-", "-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo",
                           "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                           "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out)], stdin=subprocess.PIPE)
-    bg = Image.new("RGB", (W, H), (11, 15, 20))
-    shadow = Image.new("RGBA", (card.width + 60, card.height + 60), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rectangle([30, 30, card.width + 30, card.height + 30], fill=(0, 0, 0, 160))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(18))
     for i in range(n):
         t = i / fps
-        k = 1.0 + 0.05 * (t / max(dur, 0.1))                          # slow push in
-        c = card.resize((int(card.width * k), int(card.height * k)), Image.BILINEAR).convert("RGBA")
-        hl = Image.new("RGBA", c.size, (0, 0, 0, 0))
-        dr = ImageDraw.Draw(hl)
-        for j, (x, y, w, h) in enumerate(boxes):                       # highlighter wipes in, one line after the other
-            u = min(1.0, max(0.0, (t - 0.6 - j * 0.7) / 0.6))
+        e = t / max(dur, 0.1)
+        c = card.copy()
+        for j, (m, mx, mw) in enumerate(marks):                       # one line after the other
+            u = min(1.0, max(0.0, (t - 0.7 - j * 0.9) / 0.7))
             if u > 0:
-                pad = h * 0.18
-                dr.rectangle([x * k - pad, y * k - pad, (x + w * u) * k + pad, (y + h) * k + pad], fill=(255, 214, 0, 105))
-        c = Image.alpha_composite(c, hl)
-        f = bg.copy()
-        ox, oy = (W - c.width) // 2, (H - c.height) // 2 - 20
-        f.paste(shadow.resize((c.width + 60, c.height + 60)), (ox - 30, oy - 30), shadow.resize((c.width + 60, c.height + 60)))
-        f.paste(c, (ox, oy), c)
+                u = 1 - (1 - u) ** 2
+                reveal = Image.new("L", (cw, ch), 0)
+                ImageDraw.Draw(reveal).rectangle([0, 0, int(mx + mw * u), ch], fill=255)
+                hi = ImageChops.multiply(c, yellow)
+                c.paste(hi, (0, 0), ImageChops.multiply(m, reveal))
+        k = 1.0 + 0.06 * e                                            # slow push in + drift up
+        sz = (int(cw * k), int(ch * k))
+        cc, mm = c.resize(sz, Image.BILINEAR), mask.resize(sz, Image.BILINEAR)
+        ss = shadow.resize((sz[0] + 2 * pad, sz[1] + 2 * pad), Image.BILINEAR)
+        ox, oy = (W - sz[0]) // 2, int((H - sz[1]) / 2 - 10 - 14 * e)
+        bk = 1.0 + 0.03 * e                                           # background moves a little the other way
+        f = bg.resize((int(W * bk), int(H * bk)), Image.BILINEAR).crop((0, 0, W, H))
+        f.paste((0, 0, 0), (ox - pad, oy - pad), ss)
+        border = Image.new("RGB", (sz[0] + 4, sz[1] + 4), (235, 235, 235))
+        bm = Image.new("L", border.size, 0)
+        ImageDraw.Draw(bm).rounded_rectangle([0, 0, border.width - 1, border.height - 1], 20, fill=140)
+        f.paste(border, (ox - 2, oy - 2), bm)
+        f.paste(cc, (ox, oy), mm)
         f.paste(lab, (0, 0), lab)
+        if t < 0.3:                                                   # quick fade in from black
+            f = Image.blend(Image.new("RGB", (W, H)), f, t / 0.3)
         p.stdin.write(f.tobytes())
     p.stdin.close()
-    p.wait(timeout=600)
-    Path(tag).unlink(missing_ok=True)
+    p.wait(timeout=900)
     if p.returncode != 0 or not Path(out).exists():
         raise RuntimeError("card render failed")
     return out
