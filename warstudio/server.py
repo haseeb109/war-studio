@@ -47,7 +47,50 @@ def _worker():
                 run_project(proj, from_step)
         except Exception:
             pass
+        try:
+            _maybe_retry(Path(proj))
+        except Exception:
+            pass
         JOBS.task_done()
+
+
+RETRY_WAIT = [300, 1200, 3600]
+
+
+def _maybe_retry(proj):
+    """A failed video runs again by itself (5 min, then 20 min later), from where it stopped."""
+    st = read_json(proj / "status.json", {}) or {}
+    if st.get("state") != "error":
+        return
+    n, limit = int(st.get("retries") or 0), int(load_settings().get("auto_retry", 2) or 0)
+    if n >= limit:
+        return
+    wait = RETRY_WAIT[min(n, len(RETRY_WAIT) - 1)]
+    st.update(state="scheduled", scheduled_for=time.time() + wait, retries=n + 1)
+    st.setdefault("log", []).append(time.strftime("%H:%M:%S") + f"  auto-retry {n + 1}/{limit} in {wait // 60} min "
+                                    f"(after: {str(st.get('error') or '')[:120]})")
+    write_json(proj / "status.json", st)
+
+
+WORK_FILES = ["segments", "previews", "clips", "maps", "overlays", "vo", "video_only.mp4", "mix.wav", "segments.txt"]
+
+
+def cleanup_project(proj):
+    """Remove the work files of a finished video; final.mp4, logs, script, voice and plans stay."""
+    import shutil
+    freed = 0
+    for name in WORK_FILES:
+        p = proj / name
+        if p.is_dir():
+            freed += sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.exists():
+            freed += p.stat().st_size
+            p.unlink()
+    st = read_json(proj / "status.json", {}) or {}
+    st["cleaned"] = time.time()
+    write_json(proj / "status.json", st)
+    return freed
 
 
 def _run_apply(proj):
@@ -71,9 +114,22 @@ for _ in range(max(1, int(load_settings().get("parallel_videos", 2) or 2))):
 
 
 def _scheduler():
-    """Videos scheduled for later: queue each one when its time comes (survives restarts: it lives in status.json)."""
+    """Videos scheduled for later: queue each one when its time comes (survives restarts: it lives in status.json).
+    Also removes the work files of videos finished more than auto_cleanup_days ago."""
+    last_clean = 0
     while True:
         now = time.time()
+        if now - last_clean > 3600:
+            last_clean = now
+            days = float(load_settings().get("auto_cleanup_days", 3) or 0)
+            for st_path in PROJECTS_DIR.glob("*/status.json") if days > 0 else []:
+                try:
+                    st = read_json(st_path, {}) or {}
+                    fin = float(st.get("run_finished") or 0)
+                    if st.get("state") == "done" and not st.get("cleaned") and fin and now - fin > days * 86400:
+                        cleanup_project(st_path.parent)
+                except Exception:
+                    pass
         for st_path in PROJECTS_DIR.glob("*/status.json"):
             try:
                 st = read_json(st_path, {}) or {}
@@ -822,6 +878,10 @@ def resume(jid: str, r: Resume):
     if r.from_step and r.from_step not in STEPS:
         raise HTTPException(400, "unknown step")
     (proj / "STOP").unlink(missing_ok=True)
+    st = read_json(proj / "status.json", {}) or {}
+    if st.get("retries"):
+        st["retries"] = 0
+        write_json(proj / "status.json", st)
     JOBS.put((proj, r.from_step))
     return {"ok": True}
 
@@ -840,6 +900,28 @@ def _stop(proj):
         write_json(proj / "status.json", st)
         return True
     return False
+
+
+@app.post("/api/jobs/{jid}/cleanup")
+def cleanup_job(jid: str):
+    proj = _proj(jid)
+    st = read_json(proj / "status.json", {}) or {}
+    if st.get("state") in ("running", "queued"):
+        raise HTTPException(400, "stop the video first")
+    return {"ok": True, "freed_gb": round(cleanup_project(proj) / 1e9, 2)}
+
+
+@app.delete("/api/jobs/{jid}")
+def delete_job(jid: str):
+    """Delete a video and all its files."""
+    import shutil
+    proj = _proj(jid)
+    st = read_json(proj / "status.json", {}) or {}
+    if st.get("state") in ("running", "queued"):
+        raise HTTPException(400, "stop the video first")
+    size = sum(f.stat().st_size for f in proj.rglob("*") if f.is_file())
+    shutil.rmtree(proj)
+    return {"ok": True, "freed_gb": round(size / 1e9, 2)}
 
 
 @app.post("/api/jobs/stop_all")

@@ -208,6 +208,8 @@
           <h2 id="jdTitle" style="flex:1;margin:0"></h2>
           <span id="jdBadges"></span>
           <button class="btn ghost hidden" id="jdStop" style="color:var(--red)">■ Stop</button>
+          <button class="btn ghost" id="jdClean" title="Delete work files, keep final.mp4">Free space</button>
+          <button class="btn ghost" id="jdDelete" style="color:var(--red)">Delete video</button>
         </div>
         <div id="jdPlayer" style="margin-top:14px"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px" id="jdActions">
@@ -825,6 +827,18 @@ $("#stopAllBtn").onclick = async () => {
   if (!confirm("Stop ALL running, queued and scheduled videos? Finished steps are kept; you can re-run them later.")) return;
   try { const d = await api("/api/jobs/stop_all", {}); toast(`Stopping ${d.stopped} video(s)`, 4000); setTimeout(loadJobs, 1500); }
   catch (e) { toast(e.message, 5000); }
+};
+$("#jdClean").onclick = async () => {
+  if (!confirm("Delete this video's work files (segments, clips, previews, maps)? final.mp4, script and logs stay; re-running render will fetch again.")) return;
+  try { const d = await api(`/api/jobs/${CUR_JOB}/cleanup`, {}); toast(`Freed ${d.freed_gb} GB`, 4000); } catch (e) { toast(e.message, 5000); }
+};
+$("#jdDelete").onclick = async () => {
+  if (!confirm("Delete this video completely, including final.mp4? This cannot be undone.")) return;
+  try {
+    const r = await fetch(`/api/jobs/${CUR_JOB}`, {method: "DELETE"}); const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "delete failed");
+    toast(`Deleted, freed ${d.freed_gb} GB`, 4000); document.querySelector('nav button[data-tab="jobs"]').click();
+  } catch (e) { toast(e.message, 5000); }
 };
 $("#jdStop").onclick = async () => {
   try { await api(`/api/jobs/${CUR_JOB}/stop`, {}); toast("Stopping…"); } catch (e) { toast(e.message, 5000); }

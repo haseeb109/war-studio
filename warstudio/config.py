@@ -50,6 +50,8 @@ DEFAULT_SETTINGS = {
     "tts_concurrency": 3,
     "parallel_videos": 2,
     "maptest_parallel": 3,
+    "auto_retry": 2,                 # a failed video runs again this many times (5 min, then 20 min later)
+    "auto_cleanup_days": 3,          # finished videos lose their work files after N days (final.mp4 stays); 0 = never
     "ai33_usd_per_1k_credits": 0,    # your ai33 plan price per 1000 credits (0 = unknown: costs show voice credits)
     "clip_model": "ViT-B-32",
     "clip_pretrained": "laion2b_s34b_b79k",
@@ -110,19 +112,47 @@ def masked_keys():
     return {k: (v[:4] + "..." + v[-4:] if len(v) > 10 else ("set" if v else "")) for k, v in load_keys().items()}
 
 
+# defaults of older versions that the old save wrote into settings.json: they are dropped once, so the
+# current defaults apply (the user never chose them - the old save copied every default into the file)
+OLD_DEFAULTS = {"tts_concurrency": [4]}
+
+
+def _saved():
+    if not SETTINGS_FILE.exists():
+        return {}
+    try:
+        d = json.loads(SETTINGS_FILE.read_text())
+    except Exception:
+        return {}
+    if d.get("_settings_v") != 2:                    # migrate: keep only real choices
+        d = {k: v for k, v in d.items() if k in DEFAULT_SETTINGS and v != DEFAULT_SETTINGS[k]
+             and v not in OLD_DEFAULTS.get(k, [])}
+        d["_settings_v"] = 2
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        SETTINGS_FILE.write_text(json.dumps(d, indent=2))
+    return d
+
+
 def load_settings():
     s = dict(DEFAULT_SETTINGS)
-    if SETTINGS_FILE.exists():
-        s.update(json.loads(SETTINGS_FILE.read_text()))
+    s.update({k: v for k, v in _saved().items() if k in DEFAULT_SETTINGS})
     return s
 
 
 def save_settings(new):
-    s = load_settings()
-    s.update({k: v for k, v in new.items() if k in DEFAULT_SETTINGS})
+    """Only what differs from the defaults is written, so a later version's new defaults reach the user."""
+    d = _saved()
+    for k, v in new.items():
+        if k not in DEFAULT_SETTINGS:
+            continue
+        if v == DEFAULT_SETTINGS[k] or str(v) == str(DEFAULT_SETTINGS[k]):
+            d.pop(k, None)
+        else:
+            d[k] = v
+    d["_settings_v"] = 2
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(s, indent=2))
-    return s
+    SETTINGS_FILE.write_text(json.dumps(d, indent=2))
+    return load_settings()
 
 
 def brain_config(settings=None, keys=None, provider=None, key_override=None):

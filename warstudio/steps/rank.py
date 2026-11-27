@@ -36,6 +36,12 @@ def _clip(settings):
 
 
 def clip_scores(settings, text, image_paths):
+    from ..library import _CLIP_LOCK                # one model, shared with the library and other videos
+    with _CLIP_LOCK:
+        return _clip_scores(settings, text, image_paths)
+
+
+def _clip_scores(settings, text, image_paths):
     c = _clip(settings)
     torch = c["torch"]
     imgs = []

@@ -325,3 +325,55 @@ def test_version_file_matches_pyproject():
     from warstudio import ROOT, VERSION
     py = _re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text()).group(1)
     assert VERSION == py
+
+
+def test_settings_keep_only_real_choices(tmp_path, monkeypatch):
+    from warstudio import config
+    f = tmp_path / "settings.json"
+    f.write_text(json.dumps({"tts_concurrency": 4, "render_concurrency": 4, "maps_per_video": 3}))
+    monkeypatch.setattr(config, "SETTINGS_FILE", f)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    s = config.load_settings()
+    assert s["tts_concurrency"] == config.DEFAULT_SETTINGS["tts_concurrency"]   # frozen old default dropped
+    assert s["maps_per_video"] == 3                                             # a real choice stays
+    config.save_settings({"parallel_videos": 1, "render_concurrency": config.DEFAULT_SETTINGS["render_concurrency"]})
+    saved = json.loads(f.read_text())
+    assert saved["parallel_videos"] == 1 and "render_concurrency" not in saved and "tts_concurrency" not in saved
+
+
+def test_failed_video_retries_then_gives_up(tmp_path, monkeypatch):
+    from warstudio import server
+    p = tmp_path / "v"
+    p.mkdir()
+    for n in range(3):
+        st = json.loads((p / "status.json").read_text()) if (p / "status.json").exists() else {}
+        st.update(state="error", error="dns")
+        (p / "status.json").write_text(json.dumps(st))
+        server._maybe_retry(p)
+        st = json.loads((p / "status.json").read_text())
+        if n < 2:
+            assert st["state"] == "scheduled" and st["retries"] == n + 1
+    assert st["state"] == "error"                                  # default auto_retry = 2
+
+
+def test_cleanup_and_delete_video(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from warstudio import server, pipeline
+    monkeypatch.setattr(server, "PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(pipeline, "PROJECTS_DIR", tmp_path)
+    p = tmp_path / "vid1"
+    (p / "segments").mkdir(parents=True)
+    (p / "segments" / "s1.mp4").write_bytes(b"x" * 1000)
+    (p / "final.mp4").write_bytes(b"y")
+    (p / "project.json").write_text("{}")
+    (p / "status.json").write_text(json.dumps({"state": "done"}))
+    c = TestClient(server.app)
+    assert c.post("/api/jobs/vid1/cleanup").status_code == 200
+    assert not (p / "segments").exists() and (p / "final.mp4").exists()
+    assert c.delete("/api/jobs/vid1").status_code == 200 and not p.exists()
+
+
+def test_rank_clip_uses_the_shared_lock():
+    import inspect
+    from warstudio.steps import rank
+    assert "_CLIP_LOCK" in inspect.getsource(rank.clip_scores)
