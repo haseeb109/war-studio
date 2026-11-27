@@ -63,3 +63,14 @@ def test_overlays_caps_typing_and_clean_hook():
     assert all(v["line1"] == v["line1"].upper() for v in pl.values())
     tt = overlays.type_times({"line1": "AB C", "line2": ""})
     assert len(tt) == 3 and tt[0] == overlays.TYPE_START and tt == sorted(tt)
+
+
+def test_dates_times_and_places_everywhere():
+    from warstudio import overlays as o
+    get = lambda t: (o.detect_datetime(t) or o.place_label(t, False) or {}).get("line1")
+    assert get("On 2 April 1982, a small force") == "APR 2, 1982"
+    assert get("at 4:30 a.m. they launched") == "4:30 AM"
+    assert get("struck Al Udeid Air Base in Qatar") == "AL UDEID AIR BASE"
+    assert get("the Port of Bandar Abbas burned") == "PORT OF BANDAR ABBAS"
+    assert get("troops moved into Kharkiv") == "KHARKIV"
+    assert get("in American service") is None and get("The President spoke") is None

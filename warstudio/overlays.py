@@ -53,6 +53,45 @@ YEAR_RE = re.compile(r"\b(?:in|since|by|of|back in)\s+((?:January|February|March
                      r"October|November|December)\s+)?((?:19[4-9]|20[0-3])\d)\b", re.I)
 
 
+MONTHS = r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+DAYS = r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+_MON3 = lambda m: m[:3].upper()
+DATE_RES = [   # most specific first; every match becomes a date callout
+    (re.compile(MONTHS + r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+((?:1[89]|20)\d\d)\b"), lambda m: f"{_MON3(m[1])} {int(m[2])}, {m[3]}"),
+    (re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?" + MONTHS + r",?\s+((?:1[89]|20)\d\d)\b"), lambda m: f"{_MON3(m[2])} {int(m[1])}, {m[3]}"),
+    (re.compile(MONTHS + r"\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*(?:%|percent|,\d))"), lambda m: f"{_MON3(m[1])} {int(m[2])}"),
+    (re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?" + MONTHS + r"\b"), lambda m: f"{_MON3(m[2])} {int(m[1])}"),
+    (re.compile(MONTHS + r",?\s+((?:1[89]|20)\d\d)\b"), lambda m: f"{m[1].upper()} {m[2]}"),
+    (re.compile(r"\b(?:in|during|since|until|by|from|to|of|early|late|mid|the)\s+(?:the\s+)?(?:early\s+|late\s+|mid-?)?((?:1[89]|20)\d0)s\b", re.I),
+     lambda m: f"{m[1]}s"),
+    (re.compile(r"(?<![\d,.$])\b((?:1[89]\d\d)|(?:20[0-3]\d))\b(?![\d,.]|\s*(?:%|percent|feet|ft|miles|km|meters|tons|troops|people|kg|lbs|mph|knots))"),
+     lambda m: m[1]),
+    (re.compile(r"\b(?:on|that|this|last|next|by)\s+" + DAYS + r"\b"), lambda m: m[1].upper()),
+]
+CLOCK_RE = re.compile(r"\b(\d{1,2})(?::([0-5]\d))?\s*(a\.?m\.?|p\.?m\.?)(?=\W|$)", re.I)
+HOURS_RE = re.compile(r"\b([01]\d|2[0-3])([0-5]\d)\s*hours\b", re.I)
+
+
+def detect_datetime(text):
+    """A date or a clock time anywhere in the line -> {'kind': 'time', ...} or None."""
+    m = CLOCK_RE.search(text)
+    if m and 1 <= int(m[1]) <= 12:
+        ap = "AM" if m[3].lower().startswith("a") else "PM"
+        return {"kind": "time", "line1": f"{int(m[1])}:{m[2] or '00'} {ap}", "line2": "", "type": "clock"}
+    m = TIME_RE.search(text)
+    if m:
+        g = [x for x in m.groups() if x is not None]
+        return {"kind": "time", "line1": f"{int(g[0]):02d}:{g[1]}", "line2": "", "type": "clock"}
+    m = HOURS_RE.search(text)
+    if m:
+        return {"kind": "time", "line1": f"{m[1]}:{m[2]}", "line2": "", "type": "clock"}
+    for rx, fmt in DATE_RES:
+        m = rx.search(text)
+        if m:
+            return {"kind": "time", "line1": fmt(m), "line2": "", "type": "date"}
+    return None
+
+
 def _fmt(v):
     if v >= 100:
         return f"{v:,.0f}"
@@ -117,7 +156,7 @@ def detect_more(text):
 SEAS = ["Strait of Hormuz", "Persian Gulf", "Gulf of Oman", "Red Sea", "Black Sea", "South China Sea", "Taiwan Strait",
         "Bab-el-Mandeb", "Suez Canal", "Arabian Sea", "Mediterranean", "Baltic Sea", "Pacific", "Atlantic", "Indian Ocean",
         "Gulf of Aden", "Caspian Sea", "Sea of Japan", "North Sea", "Arctic", "English Channel", "Gaza", "West Bank",
-        "Crimea", "Donbas", "Kyiv", "Moscow", "Tehran", "Washington", "Beijing", "Pentagon", "Kremlin", "White House"]
+        "Middle East", "Horn of Africa", "Crimea", "Donbas", "Kyiv", "Moscow", "Tehran", "Washington", "Beijing", "Pentagon", "Kremlin", "White House"]
 _PLACES = None
 
 
@@ -141,12 +180,50 @@ DESIGNATOR = re.compile(r"\b([A-Z]{1,4}-\d{1,3}[A-Z]?(?:\s+[A-Z][a-z]+)?)\b")   
 GROUPS = re.compile(r"\b(Revolutionary Guards?|Hezbollah|Houthis?|Hamas|NATO|CENTCOM|Pentagon|IRGC|Navy SEALs?|Marines)\b")
 
 
-def place_label(text):
-    m = DESIGNATOR.search(text) or GROUPS.search(text)
+CAP = r"[A-Z][a-zA-Z'\-]+"
+SITE_RE = re.compile(r"\b((?:Port|Fort|Camp|Cape|Lake|Mount|Gulf|Bay|Sea|Isle|Strait|Battle) of\s(?:the\s)?" + CAP + r"(?:\s" + CAP + r")?)"
+                     r"|\b((?:" + CAP + r"\s){1,2}(?:Air Base|Airbase|Naval Base|Naval Station|Air Force Base|Airfield|Airport|"
+                     r"Base|Port|Harbor|Harbour|Island|Islands|Strait|Gulf|Bay|Sea|Canal|Peninsula|Desert|Valley|Mountains?|River|"
+                     r"Province|Region|Oblast|City|Dam|Refinery|Terminal))\b"
+                     r"|\b((?:Fort|Camp|Cape|Lake|Mount|Port)\s" + CAP + r")")
+PREP_RE = re.compile(r"\b(?:in|at|near|over|off|outside|across|into|toward|towards|from|to|inside|around|above|south of|"
+                     r"north of|east of|west of)\s+(?:the\s)?(" + CAP + r"(?:\s" + CAP + r"){0,2})")
+NOT_PLACE = set("""January February March April May June July August September October November December Monday Tuesday
+Wednesday Thursday Friday Saturday Sunday The This That These Those It He She They We You I His Her Their Its A An One Two
+American Americans Soviet Soviets Iranian Iranians Russian Russians Israeli Israelis Chinese British Ukrainian Ukrainians
+Saudi Emirati Arab Arabs Western Eastern Northern Southern God Allah US U.S Navy Army Air Force Marines Congress Senate
+President General Admiral Captain Colonel Major Commander Officials Washington's Tehran's Reaper Hellfire Tomahawk Patriot
+World War Cold War Operation Without With First Second Third Last Lord Sir Her Majesty Day Night Morning Evening Today Tonight Sunday's""".split())
+
+
+def _clean_place(name):
+    words = name.split()
+    while words and words[-1] in NOT_PLACE:
+        words.pop()
+    while words and words[0] in NOT_PLACE:
+        words.pop(0)
+    nm = " ".join(words)
+    generic = {"Gulf", "Sea", "Port", "Bay", "Base", "Island", "Strait", "Middle", "City", "Region", "Desert", "River"}
+    return nm if len(nm) >= 3 and nm not in generic and not nm.endswith(("ian", "ese", "ish")) else ""
+
+
+def place_label(text, systems=True):
+    if systems:
+        m = DESIGNATOR.search(text) or GROUPS.search(text)
+        if m:
+            return {"kind": "label", "line1": m.group(1).upper()[:32], "line2": "", "type": "system"}
+    for m in SITE_RE.finditer(text):                  # the most specific first: "Al Udeid Air Base", "Port of Bandar Abbas"
+        nm = _clean_place(next(g for g in m.groups() if g))
+        if nm and " " in nm:
+            return {"kind": "label", "line1": nm.upper()[:32], "line2": "", "type": "place"}
+    m = places().search(text)                         # known country / sea / strait / capital
     if m:
-        return {"kind": "label", "line1": m.group(1).upper()[:32], "line2": "", "type": "system"}
-    m = places().search(text)
-    return {"kind": "label", "line1": m.group(1).upper()[:32], "line2": "", "type": "place"} if m else None
+        return {"kind": "label", "line1": m.group(1).upper()[:32], "line2": "", "type": "place"}
+    for m in PREP_RE.finditer(text):                  # any capitalised name after in / at / near / over ...: "in Kharkiv"
+        nm = _clean_place(m.group(1))
+        if nm:
+            return {"kind": "label", "line1": nm.upper()[:32], "line2": "", "type": "place"}
+    return None
 
 
 def plan(beats, specs, style):
@@ -161,28 +238,35 @@ def plan(beats, specs, style):
     for b in beats:
         if b["start"] < hook:                        # the hook is clean: real footage + music only, no text
             continue
-        if b["start"] - last_end < oc["min_gap_seconds"]:
-            continue
-        if sum(1 for t in times if b["start"] - t < 60) >= per_min:
-            continue
-        ov = detect(b["text"])
-        if not ov:
-            lab = (spec_by_id.get(b["id"], {}).get("label") or "").strip()
-            again = float(oc.get("label_repeat_seconds", 0) or 0)       # a system label may come back much later
-            last = seen_labels.get(lab.lower())
-            if lab and len(lab) <= 32 and (last is None or (again and b["start"] - last >= again)):
-                seen_labels[lab.lower()] = b["start"]
-                ov = {"kind": "label", "line1": lab, "line2": ""}
-        if not ov:                                   # a named place: country, sea, strait, capital
-            pl = place_label(b["text"])
-            again = float(oc.get("place_repeat_seconds", 150) or 0)
-            if pl:
-                last = seen_labels.get(pl["line1"].lower())
-                cnt = place_count.get(pl["line1"], 0)
-                if cnt < 3 and (last is None or (again and b["start"] - last >= again)):
-                    place_count[pl["line1"]] = cnt + 1
-                    seen_labels[pl["line1"].lower()] = b["start"]
-                    ov = pl
+        # dates, times and place names come every time they are said (only the same place again within
+        # 60 s is skipped); the other callouts keep the gap and per-minute limits
+        key = detect_datetime(b["text"]) or place_label(b["text"], systems=False)
+        again_place = float(oc.get("same_place_gap_seconds", 60) or 0)
+        if key and key["type"] == "place" and b["start"] - seen_labels.get("@" + key["line1"].lower(), -999) < again_place:
+            key = None
+        ov = None
+        if key and b["start"] - last_end >= 0.6:
+            ov = key
+            if key["type"] == "place":
+                seen_labels["@" + key["line1"].lower()] = b["start"]
+        elif b["start"] - last_end >= oc["min_gap_seconds"] and sum(1 for t in times if b["start"] - t < 60) < per_min:
+            ov = detect(b["text"])
+            if ov and ov.get("kind") == "time":
+                ov = None                            # (dates/times are handled above)
+            if not ov:
+                lab = (spec_by_id.get(b["id"], {}).get("label") or "").strip()
+                again = float(oc.get("label_repeat_seconds", 0) or 0)       # a system label may come back much later
+                last = seen_labels.get(lab.lower())
+                if lab and len(lab) <= 32 and (last is None or (again and b["start"] - last >= again)):
+                    seen_labels[lab.lower()] = b["start"]
+                    ov = {"kind": "label", "line1": lab, "line2": ""}
+            if not ov:
+                pl = place_label(b["text"])
+                if pl and pl["type"] == "system":
+                    last = seen_labels.get(pl["line1"].lower())
+                    if last is None or b["start"] - last >= 150:
+                        seen_labels[pl["line1"].lower()] = b["start"]
+                        ov = pl
         if ov:
             dur = min(b["end"] - b["start"], oc["max_hold_seconds"])
             ov["duration"] = round(max(0.8, dur), 3)
