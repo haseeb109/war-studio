@@ -388,6 +388,12 @@ def run_step(proj, keys, settings, style, log):
                 pool_b = [c for c in (pool.get(bid) or []) if _key(c) not in blocked]
             if pool_b:
                 winner = max(pool_b, key=lambda c: c["clip_score"])
+        if winner is None:                # last resort: a free shot meant for the beats around this one
+            i = beats.index(b)
+            near = [c for j in range(max(0, i - 4), min(len(beats), i + 5)) if j != i
+                    for c in (pool.get(str(beats[j]["id"])) or []) if _key(c) not in blocked]
+            if near:
+                winner = dict(max(near, key=lambda c: c.get("clip_score") or 0), borrowed=True)
         if winner is None:
             picks[bid] = None
             continue

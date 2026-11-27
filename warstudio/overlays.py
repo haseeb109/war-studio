@@ -114,11 +114,46 @@ def detect_more(text):
     return None
 
 
+SEAS = ["Strait of Hormuz", "Persian Gulf", "Gulf of Oman", "Red Sea", "Black Sea", "South China Sea", "Taiwan Strait",
+        "Bab-el-Mandeb", "Suez Canal", "Arabian Sea", "Mediterranean", "Baltic Sea", "Pacific", "Atlantic", "Indian Ocean",
+        "Gulf of Aden", "Caspian Sea", "Sea of Japan", "North Sea", "Arctic", "English Channel", "Gaza", "West Bank",
+        "Crimea", "Donbas", "Kyiv", "Moscow", "Tehran", "Washington", "Beijing", "Pentagon", "Kremlin", "White House"]
+_PLACES = None
+
+
+def places():
+    """Country names (from the bundled map) + seas, straits, capitals - longest first so 'Saudi Arabia' beats 'Arabia'."""
+    global _PLACES
+    if _PLACES is None:
+        names = list(SEAS)
+        try:
+            from .config import ROOT
+            geo = json.loads((ROOT / "styles" / "beyond_military" / "maps" / "countries.geojson").read_text())
+            names += [f["properties"]["name"] for f in geo["features"] if len(f["properties"].get("name", "")) > 3]
+        except Exception:
+            pass
+        names = sorted(set(names), key=len, reverse=True)
+        _PLACES = re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+    return _PLACES
+
+
+DESIGNATOR = re.compile(r"\b([A-Z]{1,4}-\d{1,3}[A-Z]?(?:\s+[A-Z][a-z]+)?)\b")      # MQ-9 Reaper, F-35, S-400
+GROUPS = re.compile(r"\b(Revolutionary Guards?|Hezbollah|Houthis?|Hamas|NATO|CENTCOM|Pentagon|IRGC|Navy SEALs?|Marines)\b")
+
+
+def place_label(text):
+    m = DESIGNATOR.search(text) or GROUPS.search(text)
+    if m:
+        return {"kind": "label", "line1": m.group(1).upper()[:32], "line2": "", "type": "system"}
+    m = places().search(text)
+    return {"kind": "label", "line1": m.group(1).upper()[:32], "line2": "", "type": "place"} if m else None
+
+
 def plan(beats, specs, style):
     """Choose at most one overlay per beat, respecting the minimum gap. Returns {beat_id: overlay}."""
     oc = style["overlays"]
     spec_by_id = {s["id"]: s for s in specs}
-    out, last_end, seen_labels = {}, -99.0, {}
+    out, last_end, seen_labels, place_count = {}, -99.0, {}, {}
     per_min = float(oc.get("max_per_minute", 99))
     times = []
     for b in beats:
@@ -134,6 +169,16 @@ def plan(beats, specs, style):
             if lab and len(lab) <= 32 and (last is None or (again and b["start"] - last >= again)):
                 seen_labels[lab.lower()] = b["start"]
                 ov = {"kind": "label", "line1": lab, "line2": ""}
+        if not ov:                                   # a named place: country, sea, strait, capital
+            pl = place_label(b["text"])
+            again = float(oc.get("place_repeat_seconds", 150) or 0)
+            if pl:
+                last = seen_labels.get(pl["line1"].lower())
+                cnt = place_count.get(pl["line1"], 0)
+                if cnt < 3 and (last is None or (again and b["start"] - last >= again)):
+                    place_count[pl["line1"]] = cnt + 1
+                    seen_labels[pl["line1"].lower()] = b["start"]
+                    ov = pl
         if ov:
             dur = min(b["end"] - b["start"], oc["max_hold_seconds"])
             ov["duration"] = round(max(0.8, dur), 3)

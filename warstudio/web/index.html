@@ -231,6 +231,7 @@
         <div id="jdMix" style="margin-top:8px"></div>
         <details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Log and re-run</summary>
           <div style="display:flex;gap:8px;margin:10px 0"><select id="resumeSel" style="width:auto"></select>
+            <button class="btn" id="continueBtn" title="Carries on where it stopped; finished steps are kept (no new cost)">Continue</button>
             <button class="btn ghost" id="resumeBtn">Re-run from step</button>
             <span class="muted" style="align-self:center">Re-running a step discards timeline edits made after it.</span></div>
           <pre id="jdLog"></pre></details>
@@ -905,6 +906,9 @@ async function refreshJob() {
 $("#resumeBtn").onclick = async () => {
   if (!confirm("Re-run from '" + $("#resumeSel").value + "'? Timeline edits made after this step are discarded.")) return;
   await api(`/api/jobs/${CUR_JOB}/resume`, {from_step: $("#resumeSel").value}); toast("Re-running from " + $("#resumeSel").value);
+};
+$("#continueBtn").onclick = async () => {
+  await api(`/api/jobs/${CUR_JOB}/resume`, {}); toast("Continuing - finished steps are kept");
 };
 $("#openBtn").onclick = () => api(`/api/open/${CUR_JOB}`, {});
 $("#markBtn").onclick = async () => { await api(`/api/review/${CUR_JOB}/reviewed`, {reviewed: !$("#markBtn").dataset.on}); await loadJobs(); refreshJob(); };

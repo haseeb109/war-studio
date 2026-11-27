@@ -699,7 +699,7 @@ def mood_plan(beats, specs, total, min_seg=90.0):
         d = max(0.1, end - b["start"])
         s = sp.get(str(b["id"]), {})
         w = dict.fromkeys(MOODS, 0.0)
-        w["neutral"] = 0.6 * d
+        w["neutral"] = 0.0
         txt = b.get("text", "")
         for m, rx in MOOD_WORDS.items():
             hits = len(_re.findall(rx, txt, _re.I))
@@ -709,6 +709,10 @@ def mood_plan(beats, specs, total, min_seg=90.0):
         if s.get("moment") == "cliffhanger":
             w["tension"] += d
         weights.append((b["start"], w))
+    avg = dict.fromkeys(MOODS, 0.0)
+    for _st, w in weights:
+        for m in MOODS:
+            avg[m] += w[m] / max(1.0, total)
     secs, t0 = [], 0.0
     starts = [b["start"] for b in beats] + [total]
     while t0 < total - 1:
@@ -721,7 +725,11 @@ def mood_plan(beats, specs, total, min_seg=90.0):
             if t0 <= st < t1:
                 for m in MOODS:
                     tot[m] += w[m]
-        mood = max(MOODS, key=lambda m: tot[m])
+        # a mood wins a section when its narration leans to it MORE than the video does on average
+        # (an absolute count let "neutral" win everything in a long video)
+        span = max(1.0, t1 - t0)
+        ratio = {m: (tot[m] / span) / (avg[m] or 1e-9) for m in MOODS if m != "neutral" and avg[m] > 0 and tot[m] > 0}
+        mood = max(ratio, key=ratio.get) if ratio and max(ratio.values()) >= 1.1 else "neutral"
         if t0 == 0 and mood == "neutral":
             mood = "tension"                                         # the hook never opens on a flat bed
         if secs and secs[-1][2] == mood:
@@ -755,6 +763,15 @@ def music_by_script(beats, specs, total, seed="", music_dir=None, log=print):
     rnd = random.Random(hashlib.md5(str(seed).encode()).hexdigest())
     for m in tracks:
         rnd.shuffle(tracks[m])
+    log("music library: " + ", ".join(f"{m} {len(tracks.get(m) or [])}" for m in MOODS))
+    long_secs = []
+    for s, e, m in secs:                      # one track never runs more than ~3.5 min: same mood, next track
+        k = max(1, round((e - s) / 210.0))
+        cuts = [s + (e - s) * i / k for i in range(k + 1)]
+        starts = [b["start"] for b in beats]
+        cuts = [cuts[0]] + [min((x for x in starts if x >= c), default=c) for c in cuts[1:-1]] + [cuts[-1]]
+        long_secs += [(a, b, m) for a, b in zip(cuts, cuts[1:]) if b > a]
+    secs = long_secs
     turn, plan, last = {}, [], None
     fallback = ["neutral", "tension", "action", "somber", "triumph"]
     for s, e, m in secs:
@@ -768,7 +785,7 @@ def music_by_script(beats, specs, total, seed="", music_dir=None, log=print):
             k += 1
             f = pool[k % len(pool)]
         turn[pool_mood] = k + 1
-        if plan and plan[-1][2] == f:
+        if plan and plan[-1][2] == f and len(pool) == 1:
             plan[-1] = (plan[-1][0], e, f)
         else:
             plan.append((s, e, f))
