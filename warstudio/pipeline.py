@@ -29,13 +29,13 @@ def slugify(title):
     return name
 
 
-def create_project(title, script, voice_id, style_id, dummy=False, sources=None, bgm=""):
+def create_project(title, script, voice_id, style_id, dummy=False, sources=None, bgm="", event=""):
     proj = PROJECTS_DIR / slugify(title)
     proj.mkdir(parents=True, exist_ok=True)
     (proj / "title.txt").write_text(title.strip() + "\n", encoding="utf-8")
     (proj / "script.txt").write_text(script.strip() + "\n", encoding="utf-8")
     write_json(proj / "project.json", {"title": title, "voice_id": voice_id, "style": style_id, "dummy": dummy,
-                                       "sources": list(sources or []), "bgm": bgm or "", "created": time.time()})
+                                       "sources": list(sources or []), "bgm": bgm or "", "event": event or "", "created": time.time()})
     write_json(proj / "status.json", {"state": "queued", "step": None, "progress": 0, "log": []})
     return proj
 

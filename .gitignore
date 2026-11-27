@@ -23,3 +23,5 @@ assets/music/*
 map_test.mp4
 map_test_work/
 map_styles_work/
+assets/events/*
+!assets/events/.gitkeep

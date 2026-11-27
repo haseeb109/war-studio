@@ -284,6 +284,7 @@ class NewJob(BaseModel):
     dummy: bool = False
     sources: list[str] = []          # footage sources for this video only; empty = all available
     bgm: str = ""                    # file name in assets/music; "" = no music
+    event: str = ""                  # event pack slug in assets/events; "" = none
     start_in_minutes: float = 0      # schedule: start this many minutes from now (0 = now)
     start_at: float = 0              # schedule: start at this unix time (overrides start_in_minutes)
 
@@ -573,6 +574,46 @@ def music_open():
     return {"ok": True, "folder": str(MUSIC_DIR)}
 
 
+class NewEvent(BaseModel):
+    title: str
+    countries: list[str] = []
+    place: str = ""
+    date: str = ""
+
+
+@app.get("/api/events")
+def events_list():
+    """Event packs in assets/events (breaking-news footage + screenshots for a current attack)."""
+    from . import events as ev
+    return {"folder": str(ev.EVENTS_DIR), "packs": ev.list_packs(), "countries": ev.COUNTRIES}
+
+
+@app.post("/api/events")
+def events_create(e: NewEvent):
+    from . import events as ev
+    if not e.title.strip():
+        raise HTTPException(400, "event title is empty")
+    pack = ev.create_pack(e.title.strip(), e.countries, e.place, e.date)
+    _open_folder(ev.pack_dir(pack["slug"]))
+    return pack
+
+
+@app.post("/api/events/{slug}/open")
+def events_open(slug: str):
+    from . import events as ev
+    d = ev.pack_dir(slug)
+    if not d.is_dir():
+        raise HTTPException(404, "event pack not found")
+    _open_folder(d)
+    return {"ok": True, "folder": str(d)}
+
+
+def _open_folder(d):
+    import sys
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(d)])
+
+
 @app.post("/api/settings")
 def set_settings(s: Settings):
     return {"ok": True, "settings": save_settings(s.settings)}
@@ -656,8 +697,12 @@ def new_job(j: NewJob):
             raise HTTPException(400, "none of the selected footage sources has an API key — add it in Settings")
     if j.bgm and j.bgm != "auto" and not (MUSIC_DIR / Path(j.bgm).name).is_file():
         raise HTTPException(400, f"music file not found in assets/music: {j.bgm}")
+    from . import events as ev
+    if j.event and not ev.pack_dir(j.event).is_dir():
+        raise HTTPException(400, f"event pack not found: {j.event}")
     proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources,
-                          "auto" if j.bgm == "auto" else (Path(j.bgm).name if j.bgm else ""))
+                          "auto" if j.bgm == "auto" else (Path(j.bgm).name if j.bgm else ""),
+                          Path(j.event).name if j.event else "")
     when = j.start_at or (time.time() + j.start_in_minutes * 60 if j.start_in_minutes > 0 else 0)
     if when and when > time.time() + 30:
         st = read_json(proj / "status.json", {}) or {}

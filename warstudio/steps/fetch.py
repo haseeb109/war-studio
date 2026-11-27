@@ -122,6 +122,12 @@ def run_step(proj, keys, style, log, settings=None):
             write_json(out_path, fetched)
     except Exception as e:
         log(f"maps: skipped ({str(e)[:160]})")
+    try:                                          # event pack: hero footage x4 + report cards (failure -> stock)
+        from .. import events
+        if events.run_step(proj, beats, vo_total, settings, style, log, fetched):
+            write_json(out_path, fetched)
+    except Exception as e:
+        log(f"event pack: skipped ({str(e)[:160]})")
     jobs = []
     for i, b in enumerate(beats):
         bid = str(b["id"])

@@ -166,6 +166,10 @@
           <select id="musicSel"><option value="">No music</option></select>
         </div>
         <div>
+          <label>Event pack <a href="#" id="eventNew" class="muted" style="font-weight:400">+ new</a> <a href="#" id="eventOpen" class="muted" style="font-weight:400">open folder</a></label>
+          <select id="eventSel" title="Breaking-news footage + screenshots: footage 4x (first in 20 s), screenshots as report cards"><option value="">No event pack</option></select>
+        </div>
+        <div>
           <label>Style / template</label>
           <select id="styleSel"></select>
         </div>
@@ -572,7 +576,7 @@ $("#startBtn").onclick = async () => {
       start_at = new Date($("#startAt").value).getTime() / 1000;
       if (start_at < Date.now() / 1000) { toast("That time has already passed"); return; }
     } else start_in_minutes = +when;
-    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources, bgm: $("#musicSel").value, start_in_minutes, start_at});
+    const d = await api("/api/jobs", {title: $("#title").value, script: $("#script").value, voice_id: $("#voiceSel").value, style: $("#styleSel").value, dummy: $("#dummy").checked, sources, bgm: $("#musicSel").value, event: $("#eventSel").value, start_in_minutes, start_at});
     $("#startMsg").textContent = d.scheduled_for ? "Scheduled for " + new Date(d.scheduled_for * 1000).toLocaleString() : "Queued: " + d.id;
     if (d.scheduled_for) { toast("Scheduled: " + new Date(d.scheduled_for * 1000).toLocaleTimeString(), 5000); $("#title").value = ""; $("#script").value = ""; await loadJobs(); return; }
     document.querySelector('nav button[data-tab="jobs"]').click(); await loadJobs(); openJob(d.id);
@@ -1096,6 +1100,30 @@ async function loadMusic() {
 $("#musicSel").onfocus = loadMusic;
 $("#musicOpen").onclick = async ev => { ev.preventDefault(); const d = await api("/api/music/open", {}); toast("Music folder: " + d.folder, 6000); loadMusic(); };
 loadMusic();
+async function loadEvents() {
+  try {
+    const d = await api("/api/events"), keep = $("#eventSel").value;
+    $("#eventSel").innerHTML = `<option value="">No event pack</option>` + d.packs.map(p =>
+      `<option value="${esc(p.slug)}">${esc(p.title || p.slug)} (${p.videos} videos, ${p.images} images)</option>`).join("");
+    if (d.packs.some(p => p.slug === keep)) $("#eventSel").value = keep;
+  } catch (e) {}
+}
+$("#eventSel").onfocus = loadEvents;
+$("#eventNew").onclick = async ev => {
+  ev.preventDefault();
+  const title = prompt("Event title (e.g. Iran strike on Al Udeid)"); if (!title) return;
+  const c = prompt("Countries, comma separated: USA, RUS, UKR, IRN, SAU, ARE", "") || "";
+  const place = prompt("Place (shown on the footage label)", "") || "";
+  const d = await api("/api/events", {title, place, countries: c.split(",").map(x => x.trim().toUpperCase()).filter(Boolean)});
+  toast("Pack made - put clips in videos/ and screenshots in images/", 7000);
+  await loadEvents(); $("#eventSel").value = d.slug;
+};
+$("#eventOpen").onclick = async ev => {
+  ev.preventDefault(); const s = $("#eventSel").value;
+  if (!s) return toast("Pick an event pack first");
+  await api(`/api/events/${encodeURIComponent(s)}/open`, {});
+};
+loadEvents();
 function bindMapSample() {
   document.querySelectorAll("[data-mapsample]").forEach(b => b.onclick = async () => {
     let box = $("#mapSampleBox");

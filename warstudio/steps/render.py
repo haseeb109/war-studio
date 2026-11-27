@@ -116,7 +116,7 @@ def run_step(proj, settings, style, log, use_hf=True):
         if out.exists():
             continue
         crop = (f or {}).get("crop_bottom", 0.0) if f and Path(f["file"]).exists() else 0.0
-        jobs.append((bid, out, segment_cmd(src, frames, fps, style, ("map_clip" if (f or {}).get("source") == "map" and src == (f or {}).get("file")
+        jobs.append((bid, out, segment_cmd(src, frames, fps, style, ("map_clip" if (f or {}).get("source") in ("map", "event") and src == (f or {}).get("file")
                                             else spec.get(b["id"], {}).get("footage_class", "real")),
                                            rendered.get(bid), out, enc, crop, offset)))
 
