@@ -185,9 +185,13 @@ def run_step(proj, settings, style, log, use_hf=True):
     write_json(proj / "sound_plan.json", {"music_levels": levels, "footage_audio": footage})
     mixwav = proj / "mix.wav"
     bgm = (read_json(proj / "project.json", {}) or {}).get("bgm") or ""
-    music = str(sfx.MUSIC_DIR / bgm) if bgm and sfx.clip_audio_only(style) else settings.get("music_file", "")
+    music_plan = None
+    if bgm == "auto" and sfx.clip_audio_only(style):            # music chosen by the script, section by section
+        music_plan, music = sfx.music_by_script(beats, specs, total, seed=proj.name, log=log), ""
+    else:
+        music = str(sfx.MUSIC_DIR / bgm) if bgm and sfx.clip_audio_only(style) else settings.get("music_file", "")
     sfx.mix(proj / "vo.wav", events, total, style, mixwav, music,
-            levels=levels, footage=footage, seed=proj.name, log=log)
+            levels=levels, footage=footage, seed=proj.name, log=log, music_plan=music_plan)
 
     final = proj / "final.mp4"
     lufs = style["audio"]["target_lufs"]

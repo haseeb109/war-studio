@@ -279,10 +279,12 @@ def map_sample_file():
 @app.get("/api/music")
 def music_list():
     """Background music files the user put into assets/music (one is chosen per video)."""
-    from .sfx import AUDIO_EXT
-    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    from .sfx import AUDIO_EXT, MOODS, mood_tracks
+    for m in MOODS:                                   # the mood folders for "Auto: by script"
+        (MUSIC_DIR / m).mkdir(parents=True, exist_ok=True)
     files = sorted(p.name for p in MUSIC_DIR.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT)
-    return {"folder": str(MUSIC_DIR), "files": files}
+    moods = {m: len(v) for m, v in mood_tracks().items() if m != "_any"}
+    return {"folder": str(MUSIC_DIR), "files": files, "moods": moods}
 
 
 @app.post("/api/music/open")
@@ -377,9 +379,10 @@ def new_job(j: NewJob):
         keys, settings = load_keys(), dict(load_settings(), **{f"use_{s}": True for s in online})
         if not any(source_ready(s, keys, settings) for s in online):
             raise HTTPException(400, "none of the selected footage sources has an API key — add it in Settings")
-    if j.bgm and not (MUSIC_DIR / Path(j.bgm).name).is_file():
+    if j.bgm and j.bgm != "auto" and not (MUSIC_DIR / Path(j.bgm).name).is_file():
         raise HTTPException(400, f"music file not found in assets/music: {j.bgm}")
-    proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources, Path(j.bgm).name if j.bgm else "")
+    proj = create_project(j.title or "Untitled", j.script, j.voice_id, j.style, j.dummy, j.sources,
+                          "auto" if j.bgm == "auto" else (Path(j.bgm).name if j.bgm else ""))
     JOBS.put((proj, None))
     return {"id": proj.name}
 

@@ -598,7 +598,7 @@ def plan_footage_audio(beats, specs, picks, fetched, style, total, settings=None
 
 # ---------------------------------------------------------------- mixing
 
-def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, footage=None, seed="", log=None):
+def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, footage=None, seed="", log=None, music_plan=None):
     """voice + SFX + footage sound + music bed -> mono 48 kHz wav (loudness is normalized later)."""
     log = log or (lambda *a, **k: None)
     vo = load_audio(vo_wav)
@@ -628,7 +628,10 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
 
     _mix_footage(out, footage or [], talk, style.get("footage_audio", {}), log)
     if clip_audio_only(style):
-        if music_file and Path(music_file).is_file():
+        if music_plan:
+            mix_bgm_plan(out, n, talk, music_plan, style.get("bgm", {}), log)
+            log("sound: voice + clip audio + music by script - no sound effects")
+        elif music_file and Path(music_file).is_file():
             mix_bgm(out, n, talk, music_file, style.get("bgm", {}), log)
             log("sound: voice + clip audio + music - no sound effects")
         else:
@@ -674,6 +677,143 @@ def mix_bgm(out, n, talk, path, mc, log):
     g = g * np.clip((n / SR - t) / max(float(mc.get("end_fade_seconds", 3.0)), 0.01), 0, 1)
     out += (loop * g).astype(np.float32)
     log(f"music: {Path(path).name} looped {k}x under the voice")
+
+
+MOODS = ["tension", "action", "somber", "triumph", "neutral"]
+MOOD_WORDS = {
+    "somber": r"\b(killed|died|dead|death|deaths|lost|sank|sunk|casualt\w*|funeral|mourn\w*|tragic|tragedy|wounded|burn(?:ed|ing)|bodies)\b",
+    "triumph": r"\b(victory|victorious|won|surrender\w*|liberat\w*|celebrat\w*|freed|heroes?|medal|triumph\w*|returned home)\b",
+    "action": r"\b(attack\w*|strik\w*|struck|fired|firing|missiles?|bomb\w*|explo\w*|battle|assault|charge|raid|shot down|hit)\b",
+    "tension": r"\b(threat\w*|warn\w*|danger\w*|secret\w*|feared|fear|hunt\w*|could|might|unknown|silence|waiting|approach\w*)\b",
+}
+
+
+def mood_plan(beats, specs, total, min_seg=75.0):
+    """Script -> music sections [(start, end, mood)]: every ~75 s window takes the mood its narration leans to most
+    (death/loss -> somber, fighting -> action, threat -> tension, victory -> triumph, else neutral)."""
+    import re as _re
+    sp = {str(s.get("id")): s for s in specs or []}
+    weights = []
+    for i, b in enumerate(beats):
+        end = total if i == len(beats) - 1 else beats[i + 1]["start"]
+        d = max(0.1, end - b["start"])
+        s = sp.get(str(b["id"]), {})
+        w = dict.fromkeys(MOODS, 0.0)
+        w["neutral"] = 0.6 * d
+        txt = b.get("text", "")
+        for m, rx in MOOD_WORDS.items():
+            hits = len(_re.findall(rx, txt, _re.I))
+            w[m] += hits * d
+        if s.get("intensity") == 3 or s.get("moment") in ("attack", "reveal"):
+            w["action"] += d
+        if s.get("moment") == "cliffhanger":
+            w["tension"] += d
+        weights.append((b["start"], w))
+    secs, t0 = [], 0.0
+    starts = [b["start"] for b in beats] + [total]
+    while t0 < total - 1:
+        t1 = min(total, t0 + min_seg)
+        t1 = min((x for x in starts if x >= t1), default=total)       # cut at a sentence start
+        if total - t1 < min_seg * 0.6:
+            t1 = total
+        tot = dict.fromkeys(MOODS, 0.0)
+        for st, w in weights:
+            if t0 <= st < t1:
+                for m in MOODS:
+                    tot[m] += w[m]
+        mood = max(MOODS, key=lambda m: tot[m])
+        if t0 == 0 and mood == "neutral":
+            mood = "tension"                                         # the hook never opens on a flat bed
+        if secs and secs[-1][2] == mood:
+            secs[-1] = (secs[-1][0], t1, mood)
+        else:
+            secs.append((t0, t1, mood))
+        t0 = t1
+    return secs
+
+
+def mood_tracks(music_dir=None):
+    d = Path(music_dir or MUSIC_DIR)
+    out = {}
+    for m in MOODS:
+        f = d / m
+        out[m] = sorted(str(p) for p in f.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT) if f.is_dir() else []
+    out["_any"] = sorted(str(p) for p in d.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT) if d.is_dir() else []
+    return out
+
+
+def music_by_script(beats, specs, total, seed="", music_dir=None, log=print):
+    """[(start, end, file)] for the whole video: each section's mood -> a track from that mood folder, used in turn,
+    never the same track twice in a row."""
+    import hashlib
+    import random
+    secs = mood_plan(beats, specs, total)
+    tracks = mood_tracks(music_dir)
+    rnd = random.Random(hashlib.md5(str(seed).encode()).hexdigest())
+    for m in tracks:
+        rnd.shuffle(tracks[m])
+    turn, plan, last = {}, [], None
+    fallback = ["neutral", "tension", "action", "somber", "triumph"]
+    for s, e, m in secs:
+        pool_mood = next((x for x in [m] + fallback if tracks.get(x)), None)
+        pool = tracks[pool_mood] if pool_mood else tracks["_any"]
+        if not pool:
+            continue
+        k = turn.get(pool_mood, 0)
+        f = pool[k % len(pool)]
+        if f == last and len(pool) > 1:
+            k += 1
+            f = pool[k % len(pool)]
+        turn[pool_mood] = k + 1
+        if plan and plan[-1][2] == f:
+            plan[-1] = (plan[-1][0], e, f)
+        else:
+            plan.append((s, e, f))
+        last = f
+    if plan:
+        log("music by script: " + " | ".join(f"{int(s // 60)}:{int(s % 60):02d} {m}" for s, _, m in secs) +
+            f" -> {len(plan)} section(s), {len(set(f for _, _, f in plan))} track(s)")
+    else:
+        log("music by script: no files in assets/music/<mood> folders - no music")
+    return plan
+
+
+def mix_bgm_plan(out, n, talk, plan, mc, log, xf_s=3.0):
+    """Several tracks in turn (music by script): each loops inside its section, 3 s crossfades between them."""
+    bed = np.zeros(n, dtype=np.float32)
+    xf = int(xf_s * SR)
+    cache = {}
+    for j, (s, e, f) in enumerate(plan):
+        if f not in cache:
+            try:
+                a = load_audio(f).astype(np.float32)
+            except Exception as ex:
+                log(f"music: could not read {Path(f).name} ({str(ex)[:80]})")
+                cache[f] = None
+                continue
+            r = float(np.sqrt(np.mean(a.astype(np.float64) ** 2))) or 1e-6
+            cache[f] = a * (db(float(mc.get("level_db", -20))) / r)
+        a = cache[f]
+        if a is None or len(a) < SR:
+            continue
+        i0 = max(0, int(s * SR) - (xf // 2 if j else 0))
+        i1 = min(n, int(e * SR) + (xf // 2 if j < len(plan) - 1 else 0))
+        L = i1 - i0
+        if L <= 0:
+            continue
+        seg = np.tile(a, -(-L // len(a)))[:L].copy()
+        if j and L > xf:
+            seg[:xf] *= np.sqrt(np.linspace(0, 1, xf, dtype=np.float32))
+        if j < len(plan) - 1 and L > xf:
+            seg[-xf:] *= np.sqrt(np.linspace(1, 0, xf, dtype=np.float32))
+        bed[i0:i1] += seg
+    idx = np.arange(n)
+    g = _duck(talk, idx, float(mc.get("gap_db", -4)), float(mc.get("under_voice_db", -12)))
+    t = idx / SR
+    g = g * np.clip(t / max(float(mc.get("fade_in_seconds", 1.0)), 0.01), 0, 1)
+    g = g * np.clip((n / SR - t) / max(float(mc.get("end_fade_seconds", 3.0)), 0.01), 0, 1)
+    out += (bed * g).astype(np.float32)
+    log(f"music: {len(plan)} section(s) from {len(set(f for _, _, f in plan))} track(s), crossfaded, under the voice")
 
 
 def _duck(talk, idx, gap_db, under_db):

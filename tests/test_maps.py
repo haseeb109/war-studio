@@ -55,13 +55,13 @@ def test_run_step_cuts_one_clip_per_beat(tmp_path, monkeypatch):
     style = json.loads(Path("styles/beyond_military/style.json").read_text())
     fetched = {}
     n = maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, fetched)
-    assert n == 3 and sorted(fetched) == ["2", "3", "5"]
-    assert sorted(calls) == [4.0, 6.0]                       # run length + pad
+    assert n == 4 and sorted(fetched) == ["2", "3", "4", "5"]   # 2-3 = 5 s; 5 alone is 3 s -> 4-5 (5 s), LOCKED 4-5 s
+    assert sorted(calls) == [6.0, 6.0]                       # 5 s map + 1 s pad
     assert all(v["source"] == "map" and Path(v["file"]).exists() for v in fetched.values())
     assert 3.0 < fetched["3"]["length"] < 3.8                # 2.5 s beat + pad
     # a second run reuses the clips and the saved plans
     monkeypatch.setattr(maps, "plan_runs", lambda *a, **k: (_ for _ in ()).throw(AssertionError("replanned")))
-    assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, {}) == 3
+    assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, {}) == 4
 
 
 def test_maps_off_or_no_renderer_changes_nothing(tmp_path, monkeypatch):
@@ -103,6 +103,21 @@ def test_select_runs_rule_count_length_first_minute():
     got = maps.select_runs(runs, beats, specs, t, {})
     assert 5 <= len(got) <= 6
     assert got[0]["start"] < 60                                    # one map in the first minute (forced)
-    assert all(4.0 <= r["end"] - r["start"] <= 5.6 for r in got)
+    assert all(4.0 <= r["end"] - r["start"] <= 5.0 for r in got)       # LOCKED: 4-5 s, never outside
     gaps = [b["start"] - a["start"] for a, b in zip(got, got[1:])]
     assert min(gaps) > 120                                         # spread over the video
+
+
+def test_every_map_gets_a_different_camera_move():
+    moves = [maps.camera(maps.SAMPLE, k, seed="video-1")["camera"] for k in range(6)]
+    assert len(set(moves)) == 6
+    other = [maps.camera(maps.SAMPLE, k, seed="video-2")["camera"] for k in range(6)]
+    assert moves != other                                  # another video opens differently
+
+
+def test_strict_window_skips_runs_that_cannot_fit():
+    beats = [{"id": 0, "start": 0.0, "end": 6.0, "text": "a"}, {"id": 1, "start": 6.0, "end": 9.0, "text": "b"},
+             {"id": 2, "start": 9.0, "end": 11.0, "text": "c"}, {"id": 3, "start": 11.0, "end": 13.5, "text": "d"}]
+    specs = [{"id": i, "footage_class": "map", "scene": str(i)} for i in range(4)]
+    got = maps.select_runs(maps.find_runs(beats, specs, 13.5), beats, specs, 13.5, {"maps_per_video": 3})
+    assert got and all(4.0 <= r["end"] - r["start"] <= 5.0 for r in got)

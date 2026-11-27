@@ -34,6 +34,42 @@ def map_look(style, settings=None, keys=None):
     return style.get("maps", {}).get("theme") or {}, {}
 
 
+CAMERAS = ["dive", "tilt_dive", "pull_back", "orbit", "pan_in", "low_rise", "spiral", "side_slide"]
+
+
+def camera(plan, k, seed=""):
+    """Every map gets its own camera move (k = its place in the video). The order is shuffled per video so two
+    videos do not open the same way either; consecutive maps never repeat a move."""
+    import hashlib
+    import random
+    moves = CAMERAS[:]
+    random.Random(hashlib.md5(str(seed).encode()).hexdigest()).shuffle(moves)
+    move = moves[k % len(moves)]
+    a, b = dict(plan["from"]), dict(plan["to"])
+    z, (lon, lat) = b["zoom"], b["center"]
+    span = 360.0 / (2 ** z) * 0.9                      # about one screen width at the end zoom, in degrees
+    near = lambda dz=0, **kw: dict({"center": [lon, lat], "zoom": round(z + dz, 2), "pitch": 0, "bearing": 0}, **kw)
+    if move == "dive":                                 # straight down from high above
+        f, t = dict(a, pitch=0, bearing=0), near()
+    elif move == "tilt_dive":                          # dives in and tips forward (drone)
+        f, t = dict(a, pitch=0, bearing=0), near(pitch=50, bearing=-18)
+    elif move == "pull_back":                          # starts on the place, pulls out to show the region
+        f, t = near(0.4, pitch=45, bearing=15), near(-1.6)
+    elif move == "orbit":                              # circles around the place
+        f, t = near(-0.5, pitch=45, bearing=-40), near(0, pitch=50, bearing=35)
+    elif move == "pan_in":                             # slides in from the side while closing in
+        f, t = near(-0.9, center=[lon + span * 1.4, lat + span * 0.3]), near()
+    elif move == "low_rise":                           # low angle, rises to look straight down
+        f, t = near(-0.2, pitch=60, bearing=30), near(0.2)
+    elif move == "spiral":                             # turns while diving in
+        f, t = dict(a, pitch=0, bearing=80), near(pitch=35)
+    else:                                              # side_slide: close, tilted, sliding across
+        f, t = near(-0.3, center=[lon - span * 1.0, lat - span * 0.4], pitch=35, bearing=-10), near(pitch=35, bearing=10)
+    for v in (f, t):
+        v["zoom"] = max(1.0, min(9.5, v["zoom"]))
+    return dict(plan, **{"from": f, "to": t, "camera": move})
+
+
 def tilt(plan, theme):
     """3D fly-in: the camera tilts down while it dives in (only for themes that ask for it)."""
     if theme.get("pitch"):
@@ -53,7 +89,8 @@ def render_sample(style, settings, keys, out):
     if not hf_cmd():
         raise RuntimeError("HyperFrames/npx not found")
     theme, extra = map_look(style, settings, keys)
-    plan = tilt(dict(SAMPLE, **extra), theme)
+    import time as _t
+    plan = camera(dict(SAMPLE, **extra), int(_t.time()) % len(CAMERAS), seed=_t.time())
     work = build_page(plan, 6.0, Path(out).parent / "map_sample_work", theme)
     render_one(work, out, style["canvas"]["fps"], timeout=600)
     shutil.rmtree(work, ignore_errors=True)
@@ -124,26 +161,36 @@ def select_runs(runs, beats, specs, vo_total, settings, log=None):
     texts = {str(b["id"]): b["text"] for b in beats}
 
     def shape(first):
-        """beats from `first` covering lo..hi seconds"""
-        i, ids = order.index(first), []
-        while i < len(order):
-            ids.append(order[i])
-            if ends[order[i]] - starts[first] >= lo:
-                break
-            i += 1
-        while len(ids) > 1 and ends[ids[-1]] - starts[first] > hi + 0.6:
-            ids.pop()
-        return {"beats": ids, "start": starts[first], "end": ends[ids[-1]], "text": " ".join(texts[x] for x in ids)}
+        """consecutive beats starting at `first` (or up to 2 beats earlier) whose total is lo..hi seconds, nearest to
+        the middle; None when no such set exists (LOCKED rule: a map is never shorter than lo or longer than hi)"""
+        i0 = order.index(first)
+        best = None
+        for st in range(i0, max(-1, i0 - 3), -1):
+            for en in range(st, min(len(order), st + 6)):
+                d = ends[order[en]] - starts[order[st]]
+                if d > hi + 1e-6:
+                    break
+                if d >= lo - 1e-6 and en >= i0:
+                    score = abs(d - (lo + hi) / 2) + 0.2 * (i0 - st)
+                    if best is None or score < best[0]:
+                        best = (score, st, en)
+        if not best:
+            return None
+        ids = order[best[1]:best[2] + 1]
+        return {"beats": ids, "start": starts[ids[0]], "end": ends[ids[-1]], "text": " ".join(texts[x] for x in ids)}
 
-    cands = [shape(r["beats"][0]) for r in runs]
+    cands = [c for c in (shape(r["beats"][0]) for r in runs) if c]
     chosen = []
     early = [c for c in cands if c["start"] < 60]
     if early:
         chosen.append(early[0])
     elif beats:
         # no geography in the first minute: the map goes on the second sentence of the hook, about the title's region
-        first = next((str(b["id"]) for b in beats if b["start"] >= 4), str(beats[0]["id"]))
-        chosen.append(dict(shape(first), forced=True))
+        for b in beats:
+            c = shape(str(b["id"])) if 4 <= b["start"] < 55 else None
+            if c:
+                chosen.append(dict(c, forced=True))
+                break
     # the rest: as evenly spread as possible over the video
     for k in range(1, n):
         target = vo_total * k / n + (vo_total / n) / 2
@@ -378,7 +425,9 @@ def run_step(proj, beats, specs, vo_total, settings, keys, style, log, fetched):
         dur = (r["end"] - r["start"]) + PAD
         clip = mdir / f"run_{r['beats'][0]}_{len(r['beats'])}.mp4"
         try:
-            if not clip.exists() and render_cached(tilt(dict(plan, **extra), theme), dur, theme, clip, mdir / f"work_{i}", fps):
+            pos = [j for j, _, _ in jobs].index(i)
+            if not clip.exists() and render_cached(camera(dict(plan, **extra), pos, seed=proj.name), dur, theme, clip,
+                                                    mdir / f"work_{i}", fps):
                 with lock:
                     cached[0] += 1
             got = {}

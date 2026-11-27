@@ -1,5 +1,6 @@
 """Sound design v2: on-screen SFX, density, moments, music intensity curve, footage sound."""
 import subprocess
+from pathlib import Path
 
 import numpy as np
 
@@ -338,3 +339,29 @@ def test_three_sounds_music_loops_to_the_end(tmp_path):
     assert rms(y[int(1 * sr):int(1.5 * sr)]) < 0.2           # no explosion sfx on top
     sfx.mix(tmp_path / "vo.wav", [], 10.0, st, tmp_path / "n.wav", music_file="")
     assert rms(sfx.load_audio(tmp_path / "n.wav")) < 1e-4    # no music chosen: nothing generated
+
+
+def test_music_by_script_moods_and_crossfaded_tracks(tmp_path):
+    import numpy as np
+    sr = sfx.SR
+    for m, hz in (("tension", 110), ("action", 220), ("somber", 330)):
+        (tmp_path / m).mkdir()
+        t = np.arange(sr * 3) / sr
+        sfx.write_wav(tmp_path / m / f"{m}.wav", (0.2 * np.sin(2 * np.pi * hz * t)).astype(np.float32))
+    beats, specs = [], []
+    lines = ["The ships waited in silence, a threat nobody could see."] * 40 + \
+            ["Missiles fired, bombs hit, the battle exploded into attack after attack."] * 40 + \
+            ["Hundreds of sailors died. The ship sank and the dead were lost."] * 40
+    for i, txt in enumerate(lines):
+        beats.append({"id": i, "start": i * 2.0, "end": i * 2.0 + 2, "text": txt})
+        specs.append({"id": i})
+    secs = sfx.mood_plan(beats, specs, 240.0)
+    assert [m for _, _, m in secs] == ["tension", "action", "somber"]
+    plan = sfx.music_by_script(beats, specs, 240.0, seed="x", music_dir=tmp_path, log=lambda *a: None)
+    assert [Path(f).stem for _, _, f in plan] == ["tension", "action", "somber"]
+    sfx.write_wav(tmp_path / "vo.wav", np.zeros(sr * 240, dtype=np.float32))
+    out = tmp_path / "o.wav"
+    sfx.mix(tmp_path / "vo.wav", [], 240.0, dict(LIVE, sound_mode="three_sounds"), out, music_plan=plan, log=lambda *a: None)
+    y = sfx.load_audio(out)
+    rms = lambda a: float(np.sqrt(np.mean(a.astype(np.float64) ** 2)))
+    assert all(rms(y[int(s * sr):int((s + 1) * sr)]) > 1e-3 for s in (20, 100, 200))

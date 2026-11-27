@@ -970,8 +970,11 @@ $("#rvApply").onclick = async () => {
 async function loadMusic() {
   try {
     const d = await api("/api/music"), keep = $("#musicSel").value;
-    $("#musicSel").innerHTML = `<option value="">No music</option>` + d.files.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
-    if (d.files.includes(keep)) $("#musicSel").value = keep;
+    const nm = Object.values(d.moods || {}).reduce((a, b) => a + b, 0);
+    const moodTxt = Object.entries(d.moods || {}).map(([m, c]) => `${m} ${c}`).join(", ");
+    $("#musicSel").innerHTML = `<option value="">No music</option>` +
+      `<option value="auto">Auto: by script (${nm ? moodTxt : "mood folders empty"})</option>` + d.files.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+    if (d.files.includes(keep) || keep === "auto") $("#musicSel").value = keep;
     $("#musicSel").title = d.files.length ? d.folder : "Put .mp3/.wav files into " + d.folder;
   } catch (e) {}
 }
