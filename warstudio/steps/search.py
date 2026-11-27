@@ -233,17 +233,22 @@ def library_first(specs, done, settings, log, project=None, only=False):
               (sp.get("visual") or " ".join(sp.get("queries") or [])[:200] or "military")).strip() for sp in todo]
     vecs = clip_text_vecs(settings, texts)
     hits = weak = subs = 0
+    from ..config import PROJECTS_DIR
+    bstart = {str(b["id"]): b["start"] for b in (read_json(PROJECTS_DIR / str(project) / "beats.json", []) or [])} \
+        if project else {}
+    hook_s = float(settings.get("library_hook_seconds", 60))
     for sp, v, t in zip(todo, vecs, texts):
-        res = idx.match(v, sp.get("entity") or "", t, k=12)
+        hook = bstart.get(str(sp["id"]), 999) < hook_s       # the opening minute: only shots no recent video showed
+        res = idx.match(v, sp.get("entity") or "", t, k=12, hook=hook)
         if only and sp.get("entity") and (not res or res[0]["clip_sim"] < floor):
             # the named system is not in the library: the closest shot of the same kind stands in
-            res = idx.match(v, "", t, k=12)
+            res = idx.match(v, "", t, k=12, hook=hook)
             subs += bool(res and res[0]["clip_sim"] >= floor)
         elif only and sp.get("entity") and res:
             # reserve: same-kind shots of other systems, used only when the named system's few shots are used up
             # (one clip max 3 times per video); without them a long video about one aircraft ran out of footage
             seen_ids = {r["id"] for r in res}
-            res = res + [dict(r, reserve=True) for r in idx.match(v, "", t, k=10) if r["id"] not in seen_ids]
+            res = res + [dict(r, reserve=True) for r in idx.match(v, "", t, k=10, hook=hook) if r["id"] not in seen_ids]
         if res and res[0]["clip_sim"] >= floor:
             done[str(sp["id"])] = res
             hits += 1

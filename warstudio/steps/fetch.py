@@ -162,7 +162,8 @@ def run_step(proj, keys, style, log, settings=None):
             if forced:
                 start = round(num(p["forced_start"]), 2)
             else:
-                start = choose_start(num(p.get("duration")), need, used.setdefault(k, []), num(p.get("min_start")))
+                hist = used.setdefault(k, list(p.get("used_offsets") or []) if p.get("source") == "library" else [])
+                start = choose_start(num(p.get("duration")), need, hist, num(p.get("min_start")))   # other videos' moments too
             used.setdefault(k, []).append(start)
         out = LIBRARY_DIR / f"{p['source']}_{p['id'].replace(':', '_')}_{int(start * 100)}_{int(need * 100)}.mp4"
         if out.exists():
@@ -231,7 +232,7 @@ def run_step(proj, keys, style, log, settings=None):
         write_json(proj / "picks.json", picks)
     try:
         from ..library import record_uses
-        n_lib = record_uses(proj, fetched, settings)
+        n_lib = record_uses(proj, fetched, settings, beats)
         if n_lib:
             log(f"library: {n_lib} shots used in this video (use count updated)")
     except Exception as e:

@@ -72,7 +72,9 @@ DEFAULT_SETTINGS = {
     "library_min_clip": 0.24,    # CLIP similarity a library shot needs to be used without online search
     "library_shots_per_video": 4,
     "library_captions": "auto",  # auto = caption new shots once with the reranker model (Gemini/Groq); off
-    "library_rotation_videos": 5,   # a library shot used in one of the last N videos rests (unless nothing else fits)
+    "library_rotation_videos": 2,   # a shot is never in two videos in a row (last N videos rest, unless nothing else fits)
+    "library_hook_fresh_videos": 20,  # the first minute of a video only uses shots none of the last N videos showed
+    "library_hook_seconds": 60,
     "library_caption_model": "lite",   # lite = newest Gemini Flash-Lite for shot captions (~half price); same = reranker model
     "library_auto_resume": True,  # a library build stopped by a crash / app restart continues when the app starts
     "library_learn": True,       # clean online clips of each finished video join the library
@@ -114,7 +116,8 @@ def masked_keys():
 
 # defaults of older versions that the old save wrote into settings.json: they are dropped once, so the
 # current defaults apply (the user never chose them - the old save copied every default into the file)
-OLD_DEFAULTS = {"tts_concurrency": [4]}
+OLD_DEFAULTS = {"tts_concurrency": [4], "library_rotation_videos": [5]}
+SETTINGS_V = 3
 
 
 def _saved():
@@ -124,10 +127,10 @@ def _saved():
         d = json.loads(SETTINGS_FILE.read_text())
     except Exception:
         return {}
-    if d.get("_settings_v") != 2:                    # migrate: keep only real choices
+    if d.get("_settings_v") != SETTINGS_V:           # migrate: keep only real choices
         d = {k: v for k, v in d.items() if k in DEFAULT_SETTINGS and v != DEFAULT_SETTINGS[k]
              and v not in OLD_DEFAULTS.get(k, [])}
-        d["_settings_v"] = 2
+        d["_settings_v"] = SETTINGS_V
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(json.dumps(d, indent=2))
     return d
@@ -149,7 +152,7 @@ def save_settings(new):
             d.pop(k, None)
         else:
             d[k] = v
-    d["_settings_v"] = 2
+    d["_settings_v"] = SETTINGS_V
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(d, indent=2))
     return load_settings()

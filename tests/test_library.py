@@ -601,3 +601,26 @@ def test_learned_shot_without_sound_is_left_for_the_proven_sound_job(settings, t
     with sqlite3.connect(library.db_path(settings)) as con:
         assert con.execute("SELECT audio FROM shots WHERE src_id='video:5'").fetchone()[0] is None
     assert b.sound_count == {"later": 1}
+
+
+def test_cross_video_rules_hook_moments_and_least_used(settings, tmp_path):
+    _add_full(settings, "a_one", "", "fighter jet")
+    _add_full(settings, "a_two", "", "fighter jet again")
+    v = np.zeros(512, np.float32)
+    v[ord("a")] = 1
+    # shot 1 was in 3 older videos (not the last 2): allowed again, but shot 2 (never used) comes first
+    for i in range(3):
+        library.record_uses(tmp_path / f"old{i}", {"0": {"source": "library", "id": "1", "start": 1.5}}, settings,
+                            [{"id": 0, "start": 200}])
+    for i in range(2):
+        library.record_uses(tmp_path / f"new{i}", {"0": {"source": "library", "id": "2", "start": 0}}, settings,
+                            [{"id": 0, "start": 300}])
+    s = dict(settings, library_rotation_videos=2, library_hook_fresh_videos=20)
+    idx = library.LibraryIndex(s)
+    body = idx.match(v, "", "jet")
+    assert body[0]["id"] == "1"                       # 2 was in the last 2 videos: rests; 1 may return (body)
+    assert body[0]["used_offsets"] == [1.5, 1.5, 1.5]  # the moment other videos showed -> fetch picks another
+    hook = idx.match(v, "", "jet", hook=True)
+    assert all(r["lib_penalty"] >= 0.05 for r in hook)  # opening minute: both seen recently -> only as a last resort
+    from warstudio.steps.fetch import choose_start
+    assert abs(choose_start(10, 2.5, body[0]["used_offsets"]) - 1.5) > 2.5

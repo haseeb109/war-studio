@@ -249,9 +249,25 @@ class LibraryIndex:
         with _DB_LOCK:
             con = _db(settings)
             rows = [dict(r) for r in con.execute("SELECT * FROM shots WHERE emb IS NOT NULL")]
-            week = time.time() - 7 * 86400
+            try:
+                con.execute("ALTER TABLE uses ADD COLUMN off REAL")
+                con.execute("ALTER TABLE uses ADD COLUMN t REAL")
+                con.commit()
+            except Exception:
+                pass
+            month = time.time() - 30 * 86400
             recent = {r[0]: r[1] for r in con.execute(
-                "SELECT shot_id, COUNT(DISTINCT project) FROM uses WHERE at > ? GROUP BY shot_id", (week,))}
+                "SELECT shot_id, COUNT(DISTINCT project) FROM uses WHERE at > ? GROUP BY shot_id", (month,))}
+            n_hook = int((settings or {}).get("library_hook_fresh_videos", 20) or 0)
+            hook_last = [r[0] for r in con.execute(
+                "SELECT project FROM uses WHERE project != ? GROUP BY project ORDER BY MAX(at) DESC LIMIT ?",
+                (exclude_project or "", n_hook))] if n_hook > 0 else []
+            self.hook_used = {r[0] for r in con.execute(
+                f"SELECT DISTINCT shot_id FROM uses WHERE project IN ({','.join('?' * len(hook_last))})",
+                hook_last)} if hook_last else set()
+            self.used_offsets = {}
+            for sid, off in con.execute("SELECT shot_id, off FROM uses WHERE off IS NOT NULL AND at > ?", (month,)):
+                self.used_offsets.setdefault(str(sid), []).append(float(off))
             last = [r[0] for r in con.execute(
                 "SELECT project FROM uses WHERE project != ? GROUP BY project ORDER BY MAX(at) DESC LIMIT ?",
                 (exclude_project or "", n_rot))] if n_rot > 0 else []
@@ -267,7 +283,7 @@ class LibraryIndex:
     def __len__(self):
         return len(self.rows)
 
-    def match(self, text_vec, entity="", visual="", k=8, rotation=True):
+    def match(self, text_vec, entity="", visual="", k=8, rotation=True, hook=False):
         """Top-k library shots for one beat. A beat that names a system only gets shots of that system.
         Shots used in the last `library_rotation_videos` videos are left out (used only if nothing else fits)."""
         if not self.rows:
@@ -292,11 +308,14 @@ class LibraryIndex:
             q = num(r.get("quality"), 0)
             if q:
                 bonus += max(-0.01, min(0.01, 0.004 * (q - 6)))           # cleaner / more cinematic shots first
-            pen = min(0.04, 0.01 * self.recent.get(r["id"], 0))          # used in other videos this week
+            # cross-video rules (a shot may appear in many videos, but never noticeably):
+            # least-used-this-month first, a fresh day between uses, the opening minute only with shots
+            # no recent video showed, and never in two videos in a row (rotation)
+            pen = min(0.05, 0.006 * self.recent.get(r["id"], 0))         # videos that used it in the last 30 days
             if time.time() - (r.get("last_used") or 0) < 86400:
-                pen += 0.01
+                pen += 0.015
             item = (float(sims[i]) + bonus - pen, float(sims[i]), ent_ok, pen, r)
-            if rotation and r["id"] in self.rotated:
+            if (rotation and r["id"] in self.rotated) or (hook and r["id"] in getattr(self, "hook_used", ())):
                 held.append(item)
             else:
                 out.append(item)
@@ -313,18 +332,29 @@ class LibraryIndex:
                         "lib_score": round(score, 4), "clip_sim": round(sim, 4), "lib_penalty": round(pen, 4),
                         # where the shot was cut from: two library shots of one source video must not replay a moment
                         "origin": f"{r.get('source') or ''}:{r.get('src_id') or ''}",
-                        "src_start": float(r.get("src_start") or 0), "src_len": float(r.get("length") or 0)})
+                        "src_start": float(r.get("src_start") or 0), "src_len": float(r.get("length") or 0),
+                        "used_offsets": getattr(self, "used_offsets", {}).get(str(r["id"]), [])})
         return res
 
 
-def record_uses(proj, fetched, settings=None):
-    ids = [int(v["id"]) for v in (fetched or {}).values() if v and v.get("source") == "library"]
+def record_uses(proj, fetched, settings=None, beats=None):
+    """One row per use: which video, which moment of the shot (off) and where in the video (t)."""
+    starts = {str(b["id"]): b["start"] for b in beats or []}
+    rows = [(int(v["id"]), float(v.get("start") or 0), starts.get(bid)) for bid, v in (fetched or {}).items()
+            if v and v.get("source") == "library"]
+    ids = [r[0] for r in rows]
     if not ids:
         return 0
     now = time.time()
     with _DB_LOCK:
         con = _db(settings)
-        con.executemany("INSERT INTO uses(shot_id, project, at) VALUES(?,?,?)", [(i, Path(proj).name, now) for i in ids])
+        try:
+            con.execute("ALTER TABLE uses ADD COLUMN off REAL")
+            con.execute("ALTER TABLE uses ADD COLUMN t REAL")
+        except Exception:
+            pass
+        con.executemany("INSERT INTO uses(shot_id, project, at, off, t) VALUES(?,?,?,?,?)",
+                        [(i, Path(proj).name, now, off, t) for i, off, t in rows])
         con.executemany("UPDATE shots SET uses = uses + 1, last_used = ? WHERE id = ?", [(now, i) for i in ids])
         con.commit()
         con.close()
