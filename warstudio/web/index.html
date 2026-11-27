@@ -196,6 +196,7 @@
   <section id="tab-jobs" class="hidden">
     <div id="libView">
       <div class="card"><div style="display:flex;align-items:center;gap:12px"><h2 style="flex:1;margin:0">Video library</h2>
+        <button class="btn ghost" id="stopAllBtn" style="color:var(--red)">■ Stop all</button>
         <input id="libSearch" placeholder="Search titles" style="width:260px"></div>
         <div class="lib" id="jobList" style="margin-top:16px"></div></div>
     </div>
@@ -205,6 +206,7 @@
           <button class="btn ghost" id="backLib">&larr; Library</button>
           <h2 id="jdTitle" style="flex:1;margin:0"></h2>
           <span id="jdBadges"></span>
+          <button class="btn ghost hidden" id="jdStop" style="color:var(--red)">■ Stop</button>
         </div>
         <div id="jdPlayer" style="margin-top:14px"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px" id="jdActions">
@@ -731,6 +733,7 @@ function renderLib() {
        ${running ? `<div class="bar" style="width:160px;margin-top:8px"><i style="width:${Math.round((j.progress || 0) * 100)}%"></i></div>` : ""}</div>`;
     const tags = [];
     if (j.state === "error") tags.push('<span class="tag bad">failed</span>');
+    if (j.state === "stopped") tags.push('<span class="tag">stopped</span>');
     if (j.state === "scheduled") tags.push(`<span class="tag warn">⏰ ${new Date(j.scheduled_for * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})}</span>`);
     if (running) tags.push('<span class="tag warn">processing</span>');
     if (j.has_final) tags.push(j.review === "reviewed" ? '<span class="tag ok">reviewed</span>' : j.review === "edited" ? '<span class="tag warn">edited</span>' : '<span class="tag">not reviewed</span>');
@@ -741,11 +744,25 @@ function renderLib() {
     if (running && j.run_started) tags.push(`<span class="tag warn">⏱ ${fmtClock(Date.now() / 1000 - j.run_started)}</span>`);
     const date = j.created ? new Date(j.created * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "short"}) : "";
     return `<div class="vc" data-id="${j.id}"><div class="pv">${pv}${j.seconds ? `<span class="dur">${fmtDur(j.seconds)}</span>` : ""}</div>
-      <div class="bd"><b>${esc(j.title || j.id)}</b><div class="muted" style="font-size:12px">${date}</div>${tags.join("")}${mixLine(j.mix)}</div></div>`;
+      <div class="bd"><b>${esc(j.title || j.id)}</b><div class="muted" style="font-size:12px">${date}</div>${tags.join("")}${mixLine(j.mix)}
+      ${running || j.state === "scheduled" ? `<button class="btn ghost vcStop" data-id="${j.id}" style="margin-top:6px;color:var(--red);padding:4px 10px">■ ${j.state === "scheduled" ? "Cancel" : "Stop"}</button>` : ""}</div></div>`;
   }).join("") : '<p class="muted">No videos yet. Create one in the Create tab.</p>';
   document.querySelectorAll(".vc").forEach(el => el.onclick = () => openJob(el.dataset.id));
+  document.querySelectorAll(".vcStop").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    try { await api(`/api/jobs/${b.dataset.id}/stop`, {}); toast("Stopping…"); b.disabled = true; setTimeout(loadJobs, 1500); }
+    catch (e) { toast(e.message, 5000); }
+  });
 }
 $("#libSearch").oninput = renderLib;
+$("#stopAllBtn").onclick = async () => {
+  if (!confirm("Stop ALL running, queued and scheduled videos? Finished steps are kept; you can re-run them later.")) return;
+  try { const d = await api("/api/jobs/stop_all", {}); toast(`Stopping ${d.stopped} video(s)`, 4000); setTimeout(loadJobs, 1500); }
+  catch (e) { toast(e.message, 5000); }
+};
+$("#jdStop").onclick = async () => {
+  try { await api(`/api/jobs/${CUR_JOB}/stop`, {}); toast("Stopping…"); } catch (e) { toast(e.message, 5000); }
+};
 
 async function openJob(id) {
   CUR_JOB = id;
@@ -766,6 +783,8 @@ async function refreshJob() {
   const rv = (JOBS.find(j => j.id === CUR_JOB) || {}).review;
   $("#jdTitle").textContent = (d.meta && d.meta.title) || d.id;
   const busy = st.state === "running" || st.state === "queued";
+  $("#jdStop").classList.toggle("hidden", !(busy || st.state === "scheduled"));
+  $("#jdStop").textContent = st.state === "scheduled" ? "■ Cancel schedule" : (st.stop_requested ? "Stopping…" : "■ Stop");
   $("#jdBadges").innerHTML = `<span class="pill ${st.state}">${st.state || ""}${st.step ? " · " + st.step : ""}</span>`;
   const idx = STATUS.steps.indexOf(st.step);
   const tm = st.timings || {}, now = Date.now() / 1000;

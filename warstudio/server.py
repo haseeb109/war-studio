@@ -31,6 +31,15 @@ PREVIEW_TEXT = "At seventeen fourteen local time, a pair of F-15E Strike Eagles 
 def _worker():
     while True:
         proj, from_step = JOBS.get()
+        from .pipeline import STOP_FILE
+        if (Path(proj) / STOP_FILE).exists():            # stopped while it was waiting in the queue
+            (Path(proj) / STOP_FILE).unlink(missing_ok=True)
+            st = read_json(Path(proj) / "status.json", {}) or {}
+            st.update(state="stopped", step=None)
+            st.setdefault("log", []).append(time.strftime("%H:%M:%S") + "  STOPPED by user before it started")
+            write_json(Path(proj) / "status.json", st)
+            JOBS.task_done()
+            continue
         try:
             if from_step == "__apply__":
                 _run_apply(proj)
@@ -626,7 +635,39 @@ def resume(jid: str, r: Resume):
         raise HTTPException(404)
     if r.from_step and r.from_step not in STEPS:
         raise HTTPException(400, "unknown step")
+    (proj / "STOP").unlink(missing_ok=True)
     JOBS.put((proj, r.from_step))
+    return {"ok": True}
+
+
+def _stop(proj):
+    st = read_json(proj / "status.json", {}) or {}
+    state = st.get("state")
+    if state == "scheduled":                         # not started yet: just cancel
+        st.update(state="stopped", scheduled_for=None)
+        st.setdefault("log", []).append(time.strftime("%H:%M:%S") + "  schedule cancelled by user")
+        write_json(proj / "status.json", st)
+        return True
+    if state in ("running", "queued"):
+        (proj / "STOP").write_text(str(time.time()))     # the worker stops at its next log line / step
+        st["stop_requested"] = time.time()
+        write_json(proj / "status.json", st)
+        return True
+    return False
+
+
+@app.post("/api/jobs/stop_all")
+def stop_all():
+    """Stop every running, queued and scheduled video."""
+    n = sum(_stop(st.parent) for st in PROJECTS_DIR.glob("*/status.json"))
+    return {"ok": True, "stopped": n}
+
+
+@app.post("/api/jobs/{jid}/stop")
+def stop_job(jid: str):
+    proj = _proj(jid)
+    if not _stop(proj):
+        raise HTTPException(400, "this video is not running, queued or scheduled")
     return {"ok": True}
 
 

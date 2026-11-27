@@ -40,6 +40,17 @@ def create_project(title, script, voice_id, style_id, dummy=False, sources=None,
     return proj
 
 
+class VideoStopped(BaseException):
+    """The user pressed Stop. BaseException so per-clip 'except Exception' handlers do not swallow it."""
+
+
+STOP_FILE = "STOP"
+
+
+def stop_requested(proj):
+    return (Path(proj) / STOP_FILE).exists()
+
+
 class Logger:
     """Thread-safe: steps log from worker threads (fetch, specs, search)."""
 
@@ -56,6 +67,8 @@ class Logger:
             write_json(self.proj / "status.json", self.status)
 
     def __call__(self, msg, progress=None):
+        if (self.proj / STOP_FILE).exists() and self.status.get("state") == "running":
+            raise VideoStopped("stopped by user")
         line = f"{datetime.now():%H:%M:%S}  {msg}"
         print(line, flush=True)
         with self._lock:
@@ -104,7 +117,9 @@ def run_project(proj, from_step=None):
                     if not VOICE_LOCK.acquire(blocking=False):
                         log("voice: waiting - another video is generating its voice (one at a time for ai33)")
                         log.set(step="voice (waiting)")
-                        VOICE_LOCK.acquire()
+                        while not VOICE_LOCK.acquire(timeout=2):
+                            if stop_requested(proj):
+                                raise VideoStopped("stopped by user")
                     try:
                         vo.run_step(proj, keys, settings, meta["voice_id"], log, dummy=dummy)
                     finally:
@@ -154,6 +169,12 @@ def run_project(proj, from_step=None):
             pass
         log(f"DONE in {fmt_duration(time.time() - t0)}" + (f" (all steps together: {fmt_duration(total)})"
                                                            if abs(total - (time.time() - t0)) > 5 else "") + " -> final.mp4")
+    except VideoStopped:
+        (proj / STOP_FILE).unlink(missing_ok=True)
+        log.status["state"] = "stopping"                     # so this last line is written
+        log("STOPPED by user - finished steps are kept; use 'Re-run from step' to continue")
+        log.set(state="stopped", error=None, step=None, run_finished=time.time())
+        return
     except Exception as e:
         log(f"ERROR: {e}")
         log(traceback.format_exc()[-1500:])

@@ -289,3 +289,30 @@ def test_schedule_a_video(tmp_path, monkeypatch):
     assert d["scheduled_for"] > _t.time() + 3500 and not put
     st = json.loads((tmp_path / d["id"] / "status.json").read_text())
     assert st["state"] == "scheduled"
+
+
+def test_stop_video_and_stop_all(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from warstudio import server, pipeline
+    monkeypatch.setattr(server, "PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(pipeline, "PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(server.JOBS, "put", lambda x: None)
+    c = TestClient(server.app)
+    ids = []
+    for mins in (0, 60, 0):
+        r = c.post("/api/jobs", json={"title": "T", "script": "One line. Two lines.", "voice_id": "v", "dummy": True,
+                                      "sources": ["library"], "start_in_minutes": mins})
+        ids.append(r.json()["id"])
+    # a running video: the logger stops it at its next line
+    log = pipeline.Logger(tmp_path / ids[0])
+    log.set(state="running")
+    assert c.post(f"/api/jobs/{ids[0]}/stop").status_code == 200
+    try:
+        log("next line")
+        raise AssertionError("should have stopped")
+    except pipeline.VideoStopped:
+        pass
+    # stop all: the scheduled one is cancelled, the queued one gets a stop flag
+    assert c.post("/api/jobs/stop_all").json()["stopped"] >= 2
+    assert json.loads((tmp_path / ids[1] / "status.json").read_text())["state"] == "stopped"
+    assert (tmp_path / ids[2] / "STOP").exists()
