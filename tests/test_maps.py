@@ -111,6 +111,11 @@ def test_select_runs_rule_count_length_first_minute():
 def test_every_map_gets_a_different_camera_move():
     moves = [maps.camera(maps.SAMPLE, k, seed="video-1")["camera"] for k in range(6)]
     assert len(set(moves)) == 6
+    for k in range(10):                                     # no move starts from the whole map any more
+        c = maps.camera(maps.SAMPLE, k, seed="video-1")
+        assert c["from"]["zoom"] >= maps.SAMPLE["to"]["zoom"] - 1.3
+    one_point = dict(maps.SAMPLE, arrows=[], points=maps.SAMPLE["points"][:1])
+    assert not {maps.camera(one_point, k, "x")["cam"] for k in range(12)} & {"follow_arrow", "point_hop"}
     other = [maps.camera(maps.SAMPLE, k, seed="video-2")["camera"] for k in range(6)]
     assert moves != other                                  # another video opens differently
 

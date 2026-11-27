@@ -34,40 +34,52 @@ def map_look(style, settings=None, keys=None):
     return style.get("maps", {}).get("theme") or {}, {}
 
 
-CAMERAS = ["dive", "tilt_dive", "pull_back", "orbit", "pan_in", "low_rise", "spiral", "side_slide"]
+CAMERAS = ["follow_arrow", "point_hop", "orbit", "push_in", "pull_back", "pan_in", "side_slide", "low_rise",
+           "crane", "drift"]
+LABEL_FX = ["drop", "type", "slide"]
 
 
 def camera(plan, k, seed=""):
-    """Every map gets its own camera move (k = its place in the video). The order is shuffled per video so two
-    videos do not open the same way either; consecutive maps never repeat a move."""
+    """Every map gets its own camera move and label effect (k = its place in the video). Nothing starts from the
+    whole map any more: every move begins near the place. Moves that need an arrow or two places are used only when
+    the plan has them; the order is shuffled per video and the same move never comes twice in a row."""
     import hashlib
     import random
+    rnd = random.Random(hashlib.md5(str(seed).encode()).hexdigest())
     moves = CAMERAS[:]
-    random.Random(hashlib.md5(str(seed).encode()).hexdigest()).shuffle(moves)
-    move = moves[k % len(moves)]
-    a, b = dict(plan["from"]), dict(plan["to"])
+    rnd.shuffle(moves)
+    ok = [m for m in moves if not (m == "follow_arrow" and not plan.get("arrows"))
+          and not (m == "point_hop" and len(plan.get("points") or []) < 2)]
+    move = ok[k % len(ok)]
+    b = dict(plan["to"])
     z, (lon, lat) = b["zoom"], b["center"]
     span = 360.0 / (2 ** z) * 0.9                      # about one screen width at the end zoom, in degrees
-    near = lambda dz=0, **kw: dict({"center": [lon, lat], "zoom": round(z + dz, 2), "pitch": 0, "bearing": 0}, **kw)
-    if move == "dive":                                 # straight down from high above
-        f, t = dict(a, pitch=0, bearing=0), near()
-    elif move == "tilt_dive":                          # dives in and tips forward (drone)
-        f, t = dict(a, pitch=0, bearing=0), near(pitch=50, bearing=-18)
-    elif move == "pull_back":                          # starts on the place, pulls out to show the region
-        f, t = near(0.4, pitch=45, bearing=15), near(-1.6)
+    near = lambda dz=0, dx=0.0, dy=0.0, **kw: dict({"center": [lon + span * dx, lat + span * dy], "zoom": round(z + dz, 2),
+                                                    "pitch": 0, "bearing": 0}, **kw)
+    ease = "inout"
+    if move == "push_in":                              # short push in and a slight tip forward (not from the whole map)
+        f, t = near(-1.2), near(0, pitch=22)
     elif move == "orbit":                              # circles around the place
-        f, t = near(-0.5, pitch=45, bearing=-40), near(0, pitch=50, bearing=35)
+        f, t = near(-0.4, pitch=50, bearing=-55), near(0, pitch=50, bearing=40)
+    elif move == "pull_back":                          # starts on the place, pulls out to show the region around it
+        f, t = near(0.6, pitch=45, bearing=20), near(-1.3, pitch=8)
     elif move == "pan_in":                             # slides in from the side while closing in
-        f, t = near(-0.9, center=[lon + span * 1.4, lat + span * 0.3]), near()
+        f, t = near(-0.6, 1.3, 0.3), near()
+    elif move == "side_slide":                         # tilted, sliding across
+        f, t = near(-0.2, -1.0, -0.4, pitch=40, bearing=-14), near(0, pitch=40, bearing=12)
     elif move == "low_rise":                           # low angle, rises to look straight down
-        f, t = near(-0.2, pitch=60, bearing=30), near(0.2)
-    elif move == "spiral":                             # turns while diving in
-        f, t = dict(a, pitch=0, bearing=80), near(pitch=35)
-    else:                                              # side_slide: close, tilted, sliding across
-        f, t = near(-0.3, center=[lon - span * 1.0, lat - span * 0.4], pitch=35, bearing=-10), near(pitch=35, bearing=10)
+        f, t = near(-0.1, pitch=62, bearing=35), near(0.2)
+    elif move == "crane":                              # from straight down, tilts up toward the horizon
+        f, t = near(0.3), near(-0.4, pitch=58, bearing=-25)
+    elif move == "drift":                              # slow steady drift across the area
+        f, t = near(0, 0.6, 0.35, pitch=30, bearing=12), near(0.2, -0.6, -0.35, pitch=30, bearing=-12)
+        ease = "linear"
+    else:                                              # follow_arrow / point_hop are driven by the page; keep a sane frame
+        f, t = near(-0.3, pitch=40), near(0, pitch=45)
     for v in (f, t):
         v["zoom"] = max(1.0, min(9.5, v["zoom"]))
-    return dict(plan, **{"from": f, "to": t, "camera": move})
+    return dict(plan, **{"from": f, "to": t, "camera": move, "cam": move, "ease": ease,
+                         "label_fx": LABEL_FX[(k + rnd.randrange(3)) % 3]})
 
 
 def tilt(plan, theme):
