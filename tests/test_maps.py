@@ -136,7 +136,7 @@ def test_maps_test_playground_api(tmp_path, monkeypatch):
     class Held(list):                                  # the background renderer sees an empty queue
         def __bool__(self):
             return False
-    monkeypatch.setattr(server, "MAPTEST", {"queue": Held(), "running": None, "error": ""})
+    monkeypatch.setattr(server, "MAPTEST", {"queue": Held(), "running": [], "error": "", "batches": {}})
     d = c.get("/api/maptest").json()
     assert "follow_arrow" in d["cameras"] and "hormuz" in d["scenes"]
     r = c.post("/api/maptest", json={"scene": "hormuz", "camera": "all", "seconds": 9})
@@ -154,3 +154,21 @@ def test_every_test_scene_builds_with_every_move(tmp_path):
             assert p["cam"] in maps.CAMERAS and p["label_fx"] in maps.LABEL_FX
     maps.build_page(maps.camera(maps.SCENES["midway"], 0, "x"), 5.0, tmp_path / "w", style["maps"]["theme"])
     assert (tmp_path / "w" / "index.html").exists()
+
+
+def test_all_moves_grid_video(tmp_path, monkeypatch):
+    import subprocess
+    from warstudio import server
+    monkeypatch.setattr(server, "MAPTEST_DIR", tmp_path)
+    done = []
+    for i, mv in enumerate(maps.CAMERAS):
+        f = f"b-{i:02d}-{mv}.mp4"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=0x{i}{i}3355:s=640x360:r=30:d=2",
+                        "-pix_fmt", "yuv420p", str(tmp_path / f)], check=True)
+        done.append({"file": f, "camera": mv, "order": i, "seconds": 2})
+    monkeypatch.setattr(server, "MAPTEST", {"queue": [], "running": [], "error": "", "batches": {
+        "b": {"left": 0, "done": done, "grid": True, "t0": 0, "scene": "red_sea"}}})
+    server._maptest_grid("b")
+    assert (tmp_path / "b-ALL.mp4").exists(), server.MAPTEST["error"]
+    meta = json.loads((tmp_path / "b-ALL.json").read_text())
+    assert meta["grid"] == maps.CAMERAS

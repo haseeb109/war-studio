@@ -429,20 +429,20 @@ async function loadMapTest(first) {
   if (first || !$("#mtScene").options.length) {
     const nice = s => s.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     $("#mtScene").innerHTML = d.scenes.map(s => `<option value="${s}">${nice(s)}</option>`).join("");
-    $("#mtCam").innerHTML = `<option value="random">Random</option><option value="all">All moves (one clip each)</option>` +
+    $("#mtCam").innerHTML = `<option value="all" selected>All moves at once (+ one grid video)</option><option value="random">Random</option>` +
       d.cameras.map(c => `<option value="${c}">${nice(c)}</option>`).join("");
     $("#mtFx").innerHTML = `<option value="">Random</option>` + d.label_fx.map(f => `<option value="${f}">${nice(f)}</option>`).join("");
   }
-  const busy = d.running || d.queue;
-  $("#mtStatus").innerHTML = (busy ? `Rendering <b>${esc((d.running || {}).camera || "…")}</b>` + (d.queue ? ` · ${d.queue} more waiting` : "") : "Idle") +
+  const busy = (d.running || []).length || d.queue;
+  $("#mtStatus").innerHTML = (busy ? `Rendering ${d.running.length} at once: <b>${esc(d.running.join(", "))}</b>` + (d.queue ? ` · ${d.queue} more waiting` : "") : "Idle") +
     (d.error ? ` <span style="color:var(--red)">· last error: ${esc(d.error)}</span>` : "");
   const sig = d.clips.map(c => c.file).join(",");
   if (sig !== MT_SEEN) {
     MT_SEEN = sig;
-    $("#mtClips").innerHTML = d.clips.map(c => `<div class="card" style="margin:0;padding:10px">
+    $("#mtClips").innerHTML = d.clips.map(c => `<div class="card" style="margin:0;padding:10px;${c.grid ? "grid-column:1/-1" : ""}">
       <video src="/api/maptest/file/${encodeURIComponent(c.file)}" controls loop muted playsinline style="width:100%;border-radius:8px"></video>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
-        <span class="tag">${esc(c.camera)}</span><span class="tag">label: ${esc(c.label_fx)}</span>
+        <span class="tag">${esc(c.camera)}</span>${c.grid ? `<span class="tag">order: ${esc(c.grid.join(" · "))}</span>` : `<span class="tag">label: ${esc(c.label_fx)}</span>`}
         <span class="tag">${esc(c.title || c.scene)}</span><span class="tag">${c.seconds}s</span><span class="tag">⏱ ${c.render_seconds}s render</span></div>
       ${c.text ? `<div class="muted" style="font-size:12px;margin-top:4px">"${esc(c.text)}"</div>` : ""}</div>`).join("") ||
       '<p class="muted">No test clips yet.</p>';

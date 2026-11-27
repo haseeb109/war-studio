@@ -309,44 +309,94 @@ def map_sample_file():
     return FileResponse(p, media_type="video/mp4")
 
 
-MAPTEST = {"queue": [], "running": None, "error": ""}
+MAPTEST = {"queue": [], "running": [], "error": "", "batches": {}}
 MAPTEST_DIR = DATA_DIR / "map_tests"
+MAPTEST_LOCK = threading.Lock()
 
 
 class MapTest(BaseModel):
     scene: str = "red_sea"
-    camera: str = "random"            # a move name, "random", or "all" (one clip per move)
+    camera: str = "all"               # a move name, "random", or "all" (every move at once + one combined grid video)
     label_fx: str = ""
     seconds: float = 5.0
     text: str = ""                    # optional: a script sentence, planned by the brain
+
+
+def _maptest_grid(batch):
+    """All clips of one 'all moves' batch side by side in one video (5 x 2 grid), each labelled with its move."""
+    import subprocess
+    b = MAPTEST["batches"].get(batch) or {}
+    clips = [c for c in b.get("done", []) if (MAPTEST_DIR / c["file"]).exists()]
+    if len(clips) < 2:
+        return
+    clips.sort(key=lambda c: c["order"])
+    cols = 5 if len(clips) > 4 else len(clips)
+    rows = -(-len(clips) // cols)
+    w, h = 1920 // cols, (1920 // cols) * 9 // 16
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+    for c in clips:
+        cmd += ["-i", str(MAPTEST_DIR / c["file"])]
+    parts, lay = [], []
+    for i in range(len(clips)):
+        parts.append(f"[{i}:v]scale={w}:{h},setsar=1[v{i}]")
+        lay.append(f"{(i % cols) * w}_{(i // cols) * h}")
+    fill = cols * rows - len(clips)
+    for j in range(fill):
+        parts.append(f"color=c=black:s={w}x{h}:d=6[f{j}]")
+    ins = "".join(f"[v{i}]" for i in range(len(clips))) + "".join(f"[f{j}]" for j in range(fill))
+    lay += [f"{((len(clips) + j) % cols) * w}_{((len(clips) + j) // cols) * h}" for j in range(fill)]
+    fc = ";".join(parts) + f";{ins}xstack=inputs={cols * rows}:layout={'|'.join(lay)}:shortest=1[out]"
+    name = f"{batch}-ALL.mp4"
+    try:
+        subprocess.run(cmd + ["-filter_complex", fc, "-map", "[out]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                              "-pix_fmt", "yuv420p", str(MAPTEST_DIR / name)], check=True, capture_output=True, timeout=600)
+        write_json(MAPTEST_DIR / f"{batch}-ALL.json", {
+            "camera": "ALL MOVES", "grid": [c["camera"] for c in clips], "label_fx": "mixed", "title": b.get("title", ""),
+            "scene": b.get("scene", ""), "seconds": clips[0].get("seconds"), "render_seconds": round(time.time() - b["t0"]),
+            "created": time.time(), "file": name, "text": ""})
+    except Exception as e:
+        MAPTEST["error"] = f"grid video: {str(e)[:200]}"
 
 
 def _maptest_worker():
     from . import maps
     from .config import load_style
     while True:
-        if not MAPTEST["queue"]:
+        with MAPTEST_LOCK:
+            job = MAPTEST["queue"].pop(0) if MAPTEST["queue"] else None
+            if job:
+                MAPTEST["running"].append(job)
+        if not job:
             time.sleep(1)
             continue
-        job = MAPTEST["queue"].pop(0)
-        MAPTEST["running"] = job
         MAPTEST_DIR.mkdir(parents=True, exist_ok=True)
-        name = time.strftime("%Y%m%d-%H%M%S") + f"-{job['camera']}"
+        name = f"{job['batch']}-{job['order']:02d}-{job['camera']}"
         out = MAPTEST_DIR / f"{name}.mp4"
         t0 = time.time()
         try:
             info = maps.render_test(load_style("beyond_military"), load_settings(), load_keys(), out, job["scene"],
                                     job["camera"], job["label_fx"], job["seconds"], job["text"])
             info.update(scene=job["scene"], text=job["text"][:120], render_seconds=round(time.time() - t0),
-                        created=time.time(), file=out.name)
+                        created=time.time(), file=out.name, order=job["order"])
             write_json(MAPTEST_DIR / f"{name}.json", info)
-            MAPTEST["error"] = ""
         except Exception as e:
+            info = None
             MAPTEST["error"] = f"{job['camera']}: {str(e)[:300]}"
-        MAPTEST["running"] = None
+        with MAPTEST_LOCK:
+            MAPTEST["running"].remove(job)
+            b = MAPTEST["batches"].get(job["batch"])
+            if b is not None:
+                b["left"] -= 1
+                if info:
+                    b["done"].append(info)
+                    b.setdefault("title", info.get("title", ""))
+                last = b["left"] == 0 and b["grid"]
+        if b is not None and last:
+            _maptest_grid(job["batch"])
 
 
-threading.Thread(target=_maptest_worker, daemon=True).start()
+for _ in range(max(1, int(load_settings().get("maptest_parallel", 3) or 3))):   # several clips render at the same time
+    threading.Thread(target=_maptest_worker, daemon=True).start()
 
 
 @app.post("/api/maptest")
@@ -358,9 +408,14 @@ def maptest_add(m: MapTest):
     for mv in moves:
         if mv != "random" and mv not in maps.CAMERAS:
             raise HTTPException(400, f"unknown camera move {mv}")
-        MAPTEST["queue"].append({"scene": m.scene, "camera": mv, "label_fx": m.label_fx,
-                                 "seconds": max(4.0, min(5.0, float(m.seconds))), "text": m.text})
-    return {"ok": True, "queued": len(moves)}
+    batch = time.strftime("%Y%m%d-%H%M%S")
+    with MAPTEST_LOCK:
+        MAPTEST["batches"][batch] = {"left": len(moves), "done": [], "grid": len(moves) > 1, "t0": time.time(),
+                                     "scene": m.scene}
+        for i, mv in enumerate(moves):
+            MAPTEST["queue"].append({"batch": batch, "order": i, "scene": m.scene, "camera": mv, "label_fx": m.label_fx,
+                                     "seconds": max(4.0, min(5.0, float(m.seconds))), "text": m.text})
+    return {"ok": True, "queued": len(moves), "batch": batch}
 
 
 @app.get("/api/maptest")
@@ -368,12 +423,12 @@ def maptest_state():
     from . import maps
     MAPTEST_DIR.mkdir(parents=True, exist_ok=True)
     clips = []
-    for j in sorted(MAPTEST_DIR.glob("*.json"), reverse=True)[:40]:
+    for j in sorted(MAPTEST_DIR.glob("*.json"), key=lambda p: (p.stat().st_mtime, "-ALL" in p.name), reverse=True)[:60]:
         d = read_json(j, {}) or {}
         if (MAPTEST_DIR / d.get("file", "")).exists():
             clips.append(d)
-    return {"queue": len(MAPTEST["queue"]), "running": MAPTEST["running"], "error": MAPTEST["error"], "clips": clips,
-            "cameras": maps.CAMERAS, "label_fx": maps.LABEL_FX, "scenes": list(maps.SCENES)}
+    return {"queue": len(MAPTEST["queue"]), "running": [r["camera"] for r in MAPTEST["running"]], "error": MAPTEST["error"],
+            "clips": clips, "cameras": maps.CAMERAS, "label_fx": maps.LABEL_FX, "scenes": list(maps.SCENES)}
 
 
 @app.get("/api/maptest/file/{name}")
@@ -386,7 +441,9 @@ def maptest_file(name: str):
 
 @app.post("/api/maptest/clear")
 def maptest_clear():
-    MAPTEST["queue"].clear()
+    with MAPTEST_LOCK:
+        MAPTEST["queue"].clear()
+    MAPTEST["error"] = ""
     for p in MAPTEST_DIR.glob("*"):
         if p.is_file():
             p.unlink()
