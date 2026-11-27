@@ -42,6 +42,8 @@
     "min_gap_seconds": 1.5,
     "max_per_minute": 9,
     "label_repeat_seconds": 240,
+    "hook_free_seconds": 30,
+    "typing_db": -17,
     "units": "imperial_plus_metric"
   },
 

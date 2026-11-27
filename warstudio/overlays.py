@@ -156,7 +156,11 @@ def plan(beats, specs, style):
     out, last_end, seen_labels, place_count = {}, -99.0, {}, {}
     per_min = float(oc.get("max_per_minute", 99))
     times = []
+    total = max((b.get("end") or b["start"]) for b in beats) if beats else 0
+    hook = float(oc.get("hook_free_seconds", 30) or 0) if total >= 120 else 0.0   # short tests: no hook rule
     for b in beats:
+        if b["start"] < hook:                        # the hook is clean: real footage + music only, no text
+            continue
         if b["start"] - last_end < oc["min_gap_seconds"]:
             continue
         if sum(1 for t in times if b["start"] - t < 60) >= per_min:
@@ -182,10 +186,23 @@ def plan(beats, specs, style):
         if ov:
             dur = min(b["end"] - b["start"], oc["max_hold_seconds"])
             ov["duration"] = round(max(0.8, dur), 3)
+            ov["line1"] = (ov.get("line1") or "").upper()   # all overlay text in capitals
+            ov["line2"] = (ov.get("line2") or "").upper()
             out[b["id"]] = ov
             last_end = b["start"] + ov["duration"]
             times.append(b["start"])
     return out
+
+
+TYPE_START, TYPE_MAX = 0.12, 0.9
+
+
+def type_times(ov):
+    """Seconds (from the overlay's start) at which each letter appears - the template types at exactly these
+    times and the typewriter sound clicks on them."""
+    text = (ov.get("line1") or "") + (ov.get("line2") or "")
+    step = min(0.055, TYPE_MAX / max(1, len(text)))
+    return [round(TYPE_START + i * step, 3) for i, ch in enumerate(text) if not ch.isspace()]
 
 
 # ---------- rendering ----------
@@ -203,6 +220,7 @@ def _font(size):
 
 
 def render_png(ov, style, out_png):
+    ov = dict(ov, line1=(ov.get("line1") or "").upper(), line2=(ov.get("line2") or "").upper())
     oc = style["overlays"]
     W, H = style["canvas"]["width"], style["canvas"]["height"]
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))

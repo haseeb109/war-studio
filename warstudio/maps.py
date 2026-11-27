@@ -363,13 +363,14 @@ def select_runs(runs, beats, specs, vo_total, settings, log=None):
 
     cands = [c for c in (shape(r["beats"][0]) for r in runs) if c]
     chosen = []
-    early = [c for c in cands if c["start"] < 60]
+    hook = 30.0 if vo_total >= 120 else 0.0                            # first 30 s = clean hook (real footage only)
+    early = [c for c in cands if hook <= c["start"] < 60]
     if early:
         chosen.append(early[0])
     elif beats:
         # no geography in the first minute: the map goes on the second sentence of the hook, about the title's region
         for b in beats:
-            c = shape(str(b["id"])) if 4 <= b["start"] < 55 else None
+            c = shape(str(b["id"])) if max(4.0, hook) <= b["start"] < 58 else None
             if c:
                 chosen.append(dict(c, forced=True))
                 break

@@ -73,7 +73,7 @@ def plan_slots(vo_total, n_videos, n_images, hero_uses=HERO_USES):
     T = float(vo_total)
     seq = []
     if n_videos:
-        seq.append((min(4.0, T * 0.1), "video", 0, STYLES[0]))   # 0-4 s: voice over the cold open
+        seq.append((0.0, "video", 0, "hook"))      # second 0: the real footage, clean (no tag, no text)
     rest, vi, ii = [], 1, 0
     while (n_videos and vi < hero_uses) or ii < n_images:
         if ii < n_images:
@@ -159,6 +159,12 @@ FILL = (f"split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop
 def render_video(src, style, dur, out, fps, label, place=""):
     """One use of the hero footage, `dur` seconds, 1920x1080, with sound where it makes sense."""
     L = max(0.5, duration(src))
+    if style == "hook":                          # the hook: footage as it is, no label, no flash, its own sound
+        enc = ["-r", str(fps), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-ar", "48000", "-ac", "2", "-t", f"{dur:.3f}"]
+        fc = f"[0:v]{FILL},tpad=stop_mode=clone:stop_duration=30[v]"
+        _ff(["-i", str(src), "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?"] + enc + [str(out)])
+        return out
     tag = {"original": "FOOTAGE", "replay": "REPLAY", "framed": "FOOTAGE", "montage": "FOOTAGE"}[style]
     lab = label_png(Path(out).with_suffix(".png"), tag, (place + " · " if place and style == "framed" else "") + label)
     enc = ["-r", str(fps), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
@@ -368,7 +374,7 @@ def run_step(proj, beats, vo_total, settings, style, log, fetched):
         taken = {b for b, v in fetched.items() if (v or {}).get("source") == "map"}
         lens = {"video": min(8.0, max(4.0, duration(vids[0]) if vids else 6.0)), "image": 5.0}
         plan = assign_beats(plan_slots(vo_total, len(vids), len(imgs)), beats, vo_total, taken, lens)
-        if plan and plan[0]["kind"] == "video" and plan[0]["start"] > 1.0:   # cold open: voice only before the hit
+        if False:                                    # cold open removed: the video opens straight on the footage
             pre = [str(b["id"]) for b in beats if b["start"] < plan[0]["start"] - 0.01 and str(b["id"]) not in taken]
             if pre and pre[0] == str(beats[0]["id"]):
                 plan.insert(0, {"kind": "intro", "idx": 0, "style": "cold_open", "beats": pre,
@@ -376,7 +382,7 @@ def run_step(proj, beats, vo_total, settings, style, log, fetched):
         write_json(plan_path, plan)
     log(f"event pack: {meta.get('title') or slug} - {sum(1 for s in plan if s['kind'] == 'video')} footage uses, "
         f"{sum(1 for s in plan if s['kind'] == 'image')} report cards"
-        + (", cold open (voice only) until the first footage" if plan and plan[0]["kind"] == "intro" else ""))
+        + (", opens straight on the footage" if plan and plan[0]["start"] < 0.5 else ""))
     texts = {str(b["id"]): b["text"] for b in beats}
     order = [str(b["id"]) for b in beats]
     got = 0

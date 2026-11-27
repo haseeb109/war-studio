@@ -12,7 +12,8 @@ def test_plan_pattern():
     kinds = [k for _t, k, _i, _s in s]
     assert kinds == ["video", "image", "video", "image", "video", "video"]
     assert s[0][0] <= 20 and sum(k == "video" for k in kinds) == 4
-    assert [st for _t, k, _i, st in s if k == "video"] == events.STYLES
+    assert [st for _t, k, _i, st in s if k == "video"] == ["hook", "replay", "framed", "montage"]
+    assert s[0][0] == 0.0
     times = [t for t, *_ in s]
     assert times == sorted(times) and 55 <= times[1] <= 95 and times[-1] < 1260 * 0.9
     assert events.plan_slots(600, 0, 0) == []
@@ -46,8 +47,19 @@ def test_run_step_end_to_end(tmp_path, monkeypatch):
     n = events.run_step(proj, beats, 240.0, {}, {"canvas": {"fps": 30}}, logs.append, fetched)
     assert n > 0, logs
     ev = [b for b, v in fetched.items() if v["source"] == "event"]
-    assert fetched["0"]["id"].endswith(":intro:0")                       # 0-4 s: cold open, voice only
     hero = [v for v in fetched.values() if ":clip.mp4:" in v["id"]]
-    assert fetched["1"]["id"] == hero[0]["id"]                            # footage hits at 4-5 s
-    assert abs(duration(fetched["1"]["file"]) - 5.0) < 0.5
-    assert len({v["id"] for v in fetched.values()}) == 1 + 4 + 1   # cold open + 4 hero uses + 1 report card
+    assert fetched["0"]["id"] == hero[0]["id"]                            # second 0: straight on the real footage
+    assert abs(duration(fetched["0"]["file"]) - 5.0) < 0.5
+    assert len({v["id"] for v in fetched.values()}) == 4 + 1   # 4 hero uses + 1 report card
+
+
+def test_overlays_caps_typing_and_clean_hook():
+    import json
+    from warstudio import overlays
+    st = json.load(open("styles/beyond_military/style.json"))
+    beats = [{"id": i, "start": i * 3.0, "end": i * 3.0 + 3, "text": "ships in the Strait of Hormuz at 0400"} for i in range(60)]
+    pl = overlays.plan(beats, [{"id": b["id"]} for b in beats], st)
+    assert pl and all(beats[int(k)]["start"] >= 30 for k in pl)
+    assert all(v["line1"] == v["line1"].upper() for v in pl.values())
+    tt = overlays.type_times({"line1": "AB C", "line2": ""})
+    assert len(tt) == 3 and tt[0] == overlays.TYPE_START and tt == sorted(tt)

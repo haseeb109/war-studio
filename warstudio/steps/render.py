@@ -190,8 +190,10 @@ def run_step(proj, settings, style, log, use_hf=True):
         music_plan, music = sfx.music_by_script(beats, specs, total, seed=proj.name, log=log), ""
     else:
         music = str(sfx.MUSIC_DIR / bgm) if bgm and sfx.clip_audio_only(style) else settings.get("music_file", "")
+    bstart = {str(b["id"]): b["start"] for b in beats}
+    typing = sorted(bstart[k] + t for k, ov in (plan or {}).items() if k in bstart for t in ovl.type_times(ov))
     sfx.mix(proj / "vo.wav", events, total, style, mixwav, music,
-            levels=levels, footage=footage, seed=proj.name, log=log, music_plan=music_plan)
+            levels=levels, footage=footage, seed=proj.name, log=log, music_plan=music_plan, typing=typing)
 
     final = proj / "final.mp4"
     lufs = style["audio"]["target_lufs"]

@@ -598,7 +598,8 @@ def plan_footage_audio(beats, specs, picks, fetched, style, total, settings=None
 
 # ---------------------------------------------------------------- mixing
 
-def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, footage=None, seed="", log=None, music_plan=None):
+def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, footage=None, seed="", log=None, music_plan=None,
+        typing=None):
     """voice + SFX + footage sound + music bed -> mono 48 kHz wav (loudness is normalized later)."""
     log = log or (lambda *a, **k: None)
     vo = load_audio(vo_wav)
@@ -627,6 +628,9 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
         _add(out, x, s)
 
     _mix_footage(out, footage or [], talk, style.get("footage_audio", {}), log)
+    if typing:                                        # typewriter keys under the overlay text (the user's 4th sound)
+        mix_typing(out, typing, float((style.get("overlays") or {}).get("typing_db", -17)), seed)
+        log(f"sound: typewriter clicks for the text overlays ({len(typing)} keys)")
     if clip_audio_only(style):
         if music_plan:
             mix_bgm_plan(out, n, talk, music_plan, style.get("bgm", {}), log)
@@ -644,6 +648,26 @@ def mix(vo_wav, events, total, style, out_wav, music_file="", levels=None, foota
         out *= 0.98 / peak
     write_wav(out_wav, out)
     return out_wav
+
+
+def key_click(rnd):
+    """One typewriter key: a sharp 3 ms metal tick + a short wooden thunk, slightly different every key."""
+    n = int(0.045 * SR)
+    t = np.arange(n) / SR
+    tick = np.random.default_rng(rnd.randint(0, 1 << 30)).normal(0, 1, n) * np.exp(-t / 0.0025)
+    tick = tick - _lp(tick, 6)                                       # keep the bright part
+    f = rnd.uniform(1700, 2600)
+    ring = np.sin(2 * np.pi * f * t) * np.exp(-t / 0.006) * 0.5
+    thunk = np.sin(2 * np.pi * rnd.uniform(140, 210) * t) * np.exp(-t / 0.012) * 0.6
+    x = tick * 0.7 + ring + thunk
+    return (x / (np.max(np.abs(x)) or 1) * rnd.uniform(0.8, 1.0)).astype(np.float32)
+
+
+def mix_typing(out, times, gain_db=-17.0, seed=""):
+    rnd = random.Random(f"{seed}:type")
+    g = db(gain_db)
+    for t in times:
+        _add(out, key_click(rnd) * g, int(float(t) * SR))
 
 
 def clip_audio_only(style):
@@ -730,7 +754,7 @@ def mood_plan(beats, specs, total, min_seg=90.0):
         span = max(1.0, t1 - t0)
         ratio = {m: (tot[m] / span) / (avg[m] or 1e-9) for m in MOODS if m != "neutral" and avg[m] > 0 and tot[m] > 0}
         mood = max(ratio, key=ratio.get) if ratio and max(ratio.values()) >= 1.1 else "neutral"
-        if t0 == 0 and mood == "neutral":
+        if t0 == 0 and mood in ("neutral", "somber", "triumph"):     # the hook always opens on intense music
             mood = "tension"                                         # the hook never opens on a flat bed
         if secs and secs[-1][2] == mood:
             secs[-1] = (secs[-1][0], t1, mood)
