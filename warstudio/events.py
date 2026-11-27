@@ -73,7 +73,7 @@ def plan_slots(vo_total, n_videos, n_images, hero_uses=HERO_USES):
     T = float(vo_total)
     seq = []
     if n_videos:
-        seq.append((min(5.0, T * 0.1), "video", 0, STYLES[0]))
+        seq.append((min(4.0, T * 0.1), "video", 0, STYLES[0]))   # 0-4 s: voice over the cold open
     rest, vi, ii = [], 1, 0
     while (n_videos and vi < hero_uses) or ii < n_images:
         if ii < n_images:
@@ -165,7 +165,8 @@ def render_video(src, style, dur, out, fps, label, place=""):
            "-c:a", "aac", "-ar", "48000", "-ac", "2", "-t", f"{dur:.3f}"]
     silent = ["-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     if style == "original":                      # as it is, from the start
-        fc = f"[0:v]{FILL},tpad=stop_mode=clone:stop_duration=30[v0];[v0][1:v]overlay[v]"
+        fc = (f"[0:v]{FILL},tpad=stop_mode=clone:stop_duration=30,"          # hard cut in on a white flash
+              f"geq=lum='min(255,lum(X,Y)+255*max(0,1-T/0.25))':cb='cb(X,Y)':cr='cr(X,Y)'[v0];[v0][1:v]overlay[v]")
         _ff(["-i", str(src), "-i", str(lab), "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?"] + enc + [str(out)])
     elif style == "replay":                      # the middle moment at half speed, the last second frozen, red frame
         take = max(0.5, (dur - 1.0) / 2)
@@ -261,6 +262,57 @@ def render_card(img_path, dur, out, fps, label, words):
     return out
 
 
+def render_intro(dur, out, fps, meta, words):
+    """Cold open, voice only: black screen, red BREAKING tag blinking, the event title typing in letter by letter,
+    place + date below, a thin red line growing, the narration's key words fading under it. Ends on black so the
+    hero footage hits hard on its white flash."""
+    from PIL import Image, ImageDraw
+    title = (meta.get("title") or "").upper()[:60]
+    sub = " · ".join(x for x in [meta.get("place", ""), meta.get("date", "")] if x).upper()
+    kw = " ".join(w for w in re.findall(r"[A-Za-z']+", " ".join(words)) if len(w) > 3)[:70].upper()
+    fT, fB, fS, fK = _font(92), _font(40), _font(34), _font(30)
+    from PIL import ImageDraw as _D
+    for size in (92, 80, 68, 58):                                      # long titles: smaller, never off screen
+        fT = _font(size)
+        if _D.Draw(Image.new("RGB", (8, 8))).textlength(title, font=fT) <= W - 160:
+            break
+    n = max(1, int(dur * fps))
+    p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
+                          "-r", str(fps), "-i", "-", "-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo",
+                          "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                          "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out)], stdin=subprocess.PIPE)
+    for i in range(n):
+        t = i / fps
+        fade = max(0.0, min(1.0, (dur - 0.9 - t) / 0.4))                  # last ~0.5 s goes to black
+        im = Image.new("RGB", (W, H), (6, 8, 11))
+        d = ImageDraw.Draw(im)
+        a = lambda v: int(v * fade)
+        if int(t * 2.5) % 2 == 0 or t > 1.6:                               # BREAKING blinks, then stays
+            bw = d.textlength("BREAKING", font=fB)
+            d.rectangle([W / 2 - bw / 2 - 24, 330, W / 2 + bw / 2 + 24, 390], fill=(a(210), a(20), a(30)))
+            d.text((W / 2 - bw / 2, 336), "BREAKING", font=fB, fill=(a(255),) * 3)
+        k = int(len(title) * min(1.0, max(0.0, (t - 0.4) / 1.6)))            # title types in
+        shown = title[:k] + ("_" if k < len(title) and int(t * 6) % 2 else "")
+        tw = d.textlength(title, font=fT)
+        d.text((W / 2 - tw / 2, 440), shown, font=fT, fill=(a(255),) * 3)
+        lw = (tw + 80) * min(1.0, max(0.0, (t - 1.2) / 1.0))                 # red line grows from the middle
+        d.rectangle([W / 2 - lw / 2, 565, W / 2 + lw / 2, 571], fill=(a(210), a(20), a(30)))
+        if sub and t > 2.0:
+            u = min(1.0, (t - 2.0) / 0.5)
+            sw = d.textlength(sub, font=fS)
+            d.text((W / 2 - sw / 2, 600), sub, font=fS, fill=(a(200 * u), a(200 * u), a(200 * u)))
+        if kw and t > 2.6:
+            u = min(1.0, (t - 2.6) / 0.6)
+            kwid = d.textlength(kw, font=fK)
+            d.text((W / 2 - kwid / 2, 680), kw, font=fK, fill=(a(255 * u), a(196 * u), 0))
+        p.stdin.write(im.tobytes())
+    p.stdin.close()
+    p.wait(timeout=600)
+    if p.returncode != 0 or not Path(out).exists():
+        raise RuntimeError("intro render failed")
+    return out
+
+
 def cut(src, start, need, out, fps):
     _ff(["-ss", f"{max(0.0, start):.3f}", "-i", str(src), "-t", f"{need:.3f}", "-r", str(fps), "-c:v", "libx264",
          "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", str(out)])
@@ -290,9 +342,15 @@ def run_step(proj, beats, vo_total, settings, style, log, fetched):
         taken = {b for b, v in fetched.items() if (v or {}).get("source") == "map"}
         lens = {"video": min(8.0, max(4.0, duration(vids[0]) if vids else 6.0)), "image": 5.0}
         plan = assign_beats(plan_slots(vo_total, len(vids), len(imgs)), beats, vo_total, taken, lens)
+        if plan and plan[0]["kind"] == "video" and plan[0]["start"] > 1.0:   # cold open: voice only before the hit
+            pre = [str(b["id"]) for b in beats if b["start"] < plan[0]["start"] - 0.01 and str(b["id"]) not in taken]
+            if pre and pre[0] == str(beats[0]["id"]):
+                plan.insert(0, {"kind": "intro", "idx": 0, "style": "cold_open", "beats": pre,
+                                "start": beats[0]["start"], "end": plan[0]["start"]})
         write_json(plan_path, plan)
     log(f"event pack: {meta.get('title') or slug} - {sum(1 for s in plan if s['kind'] == 'video')} footage uses, "
-        f"{sum(1 for s in plan if s['kind'] == 'image')} report cards")
+        f"{sum(1 for s in plan if s['kind'] == 'image')} report cards"
+        + (", cold open (voice only) until the first footage" if plan and plan[0]["kind"] == "intro" else ""))
     texts = {str(b["id"]): b["text"] for b in beats}
     order = [str(b["id"]) for b in beats]
     got = 0
@@ -303,14 +361,17 @@ def run_step(proj, beats, vo_total, settings, style, log, fetched):
         clip = edir / f"slot_{k:02d}_{s['kind']}_{s['style']}.mp4"
         try:
             if not clip.exists():
-                if s["kind"] == "video":
+                if s["kind"] == "intro":
+                    render_intro(dur, clip, fps, meta, [texts[b] for b in s["beats"]])
+                elif s["kind"] == "video":
                     f = vids[s["idx"] % len(vids)]
                     render_video(f, s["style"], dur, clip, fps, credits.get(f.name, ""), meta.get("place", ""))
                 else:
                     f = imgs[s["idx"] % len(imgs)]
                     words = [texts[b] for b in s["beats"]]
                     render_card(f, dur, clip, fps, credits.get(f.name, ""), words)
-            src_name = (vids[s["idx"] % len(vids)] if s["kind"] == "video" else imgs[s["idx"] % len(imgs)]).name
+            src_name = ("intro" if s["kind"] == "intro" else
+                        (vids[s["idx"] % len(vids)] if s["kind"] == "video" else imgs[s["idx"] % len(imgs)]).name)
             for bid in s["beats"]:
                 i = order.index(bid)
                 b = beats[i]

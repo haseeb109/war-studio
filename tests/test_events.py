@@ -46,6 +46,8 @@ def test_run_step_end_to_end(tmp_path, monkeypatch):
     n = events.run_step(proj, beats, 240.0, {}, {"canvas": {"fps": 30}}, logs.append, fetched)
     assert n > 0, logs
     ev = [b for b, v in fetched.items() if v["source"] == "event"]
-    assert int(min(ev, key=int)) * 4 <= 20
-    assert abs(duration(fetched[ev[0]]["file"]) - 5.0) < 0.5
-    assert len({v["id"] for v in fetched.values()}) == 4 + 1   # 4 hero uses + 1 report card
+    assert fetched["0"]["id"].endswith(":intro:0")                       # 0-4 s: cold open, voice only
+    hero = [v for v in fetched.values() if ":clip.mp4:" in v["id"]]
+    assert fetched["1"]["id"] == hero[0]["id"]                            # footage hits at 4-5 s
+    assert abs(duration(fetched["1"]["file"]) - 5.0) < 0.5
+    assert len({v["id"] for v in fetched.values()}) == 1 + 4 + 1   # cold open + 4 hero uses + 1 report card
