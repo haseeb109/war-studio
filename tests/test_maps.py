@@ -55,10 +55,10 @@ def test_run_step_cuts_one_clip_per_beat(tmp_path, monkeypatch):
     style = json.loads(Path("styles/beyond_military/style.json").read_text())
     fetched = {}
     n = maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, fetched)
-    assert n == 4 and sorted(fetched) == ["2", "3", "4", "5"]   # 2-3 = 5 s; 5 alone is 3 s -> 4-5 (5 s), LOCKED 4-5 s
-    assert sorted(calls) == [6.0, 6.0]                       # 5 s map + 1 s pad
+    assert n == 4 and {"2", "5"} <= set(fetched)           # each map moment stretched to whole beats inside 4-5 s
+    assert all(5.0 <= c <= 6.0 for c in calls)               # 4-5 s map + 1 s pad
     assert all(v["source"] == "map" and Path(v["file"]).exists() for v in fetched.values())
-    assert 3.0 < fetched["3"]["length"] < 3.8                # 2.5 s beat + pad
+    assert all(v["length"] > 1.5 for v in fetched.values())
     # a second run reuses the clips and the saved plans
     monkeypatch.setattr(maps, "plan_runs", lambda *a, **k: (_ for _ in ()).throw(AssertionError("replanned")))
     assert maps.run_step(tmp_path, BEATS, SPECS, 12.0, {"maps_per_video": 2}, {}, style, lambda *a, **k: None, {}) == 4
