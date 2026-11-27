@@ -162,7 +162,7 @@
         </div>
         <div style="flex:0 0 auto"><button class="btn ghost" id="prevBtn">&#9654; Preview voice</button></div>
         <div>
-          <label>Background music <a href="#" id="musicOpen" class="muted" style="font-weight:400">open folder</a></label>
+          <label>Background music <a href="#" id="musicOpen" class="muted" style="font-weight:400">open folder</a> <a href="#" id="musicMoods" class="muted" style="font-weight:400">moods</a></label>
           <select id="musicSel"><option value="">No music</option></select>
         </div>
         <div>
@@ -1092,12 +1092,18 @@ async function loadMusic() {
     const nm = Object.values(d.moods || {}).reduce((a, b) => a + b, 0);
     const moodTxt = Object.entries(d.moods || {}).map(([m, c]) => `${m} ${c}`).join(", ");
     $("#musicSel").innerHTML = `<option value="">No music</option>` +
-      `<option value="auto">Auto: by script (${nm ? moodTxt : "mood folders empty"})</option>` + d.files.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
+      `<option value="auto">Auto: by script (${nm ? moodTxt : "no music files"})</option>` + d.files.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join("");
     if (d.files.includes(keep) || keep === "auto") $("#musicSel").value = keep;
     $("#musicSel").title = d.files.length ? d.folder : "Put .mp3/.wav files into " + d.folder;
   } catch (e) {}
 }
 $("#musicSel").onfocus = loadMusic;
+$("#musicMoods").onclick = async ev => {
+  ev.preventDefault(); toast("Listening to the music files...", 4000);
+  const d = await api("/api/music");
+  const by = {}; (d.tracks || []).forEach(t => (by[t.mood] = by[t.mood] || []).push(t.file + (t.bpm ? ` (${t.bpm} bpm)` : "") + (t.source === "folder" ? " [folder]" : "")));
+  alert(Object.entries(by).map(([m, l]) => m.toUpperCase() + "\n  " + l.join("\n  ")).join("\n\n") || "No music files in " + d.folder);
+};
 $("#musicOpen").onclick = async ev => { ev.preventDefault(); const d = await api("/api/music/open", {}); toast("Music folder: " + d.folder, 6000); loadMusic(); };
 loadMusic();
 async function loadEvents() {

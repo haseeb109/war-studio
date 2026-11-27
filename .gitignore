@@ -25,3 +25,4 @@ map_test_work/
 map_styles_work/
 assets/events/*
 !assets/events/.gitkeep
+assets/music/.analysis.json

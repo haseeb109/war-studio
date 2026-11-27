@@ -688,8 +688,8 @@ MOOD_WORDS = {
 }
 
 
-def mood_plan(beats, specs, total, min_seg=75.0):
-    """Script -> music sections [(start, end, mood)]: every ~75 s window takes the mood its narration leans to most
+def mood_plan(beats, specs, total, min_seg=90.0):
+    """Script -> music sections [(start, end, mood)]: every ~90 s window takes the mood its narration leans to most
     (death/loss -> somber, fighting -> action, threat -> tension, victory -> triumph, else neutral)."""
     import re as _re
     sp = {str(s.get("id")): s for s in specs or []}
@@ -732,12 +732,15 @@ def mood_plan(beats, specs, total, min_seg=75.0):
     return secs
 
 
-def mood_tracks(music_dir=None):
+def mood_tracks(music_dir=None, log=None):
+    """{mood: [files]}: every file in assets/music (root and sub-folders) listened to and given a mood
+    (musicmood.py); files in assets/music/<mood>/ keep their folder's mood."""
+    from .musicmood import analyse_library
     d = Path(music_dir or MUSIC_DIR)
-    out = {}
-    for m in MOODS:
-        f = d / m
-        out[m] = sorted(str(p) for p in f.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT) if f.is_dir() else []
+    out = {m: [] for m in MOODS}
+    for rel, a in analyse_library(d, log or (lambda *_: None)).items():
+        out.setdefault(a["mood"], []).append(a["file"])
+    out = {m: sorted(v) for m, v in out.items()}
     out["_any"] = sorted(str(p) for p in d.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT) if d.is_dir() else []
     return out
 
@@ -748,7 +751,7 @@ def music_by_script(beats, specs, total, seed="", music_dir=None, log=print):
     import hashlib
     import random
     secs = mood_plan(beats, specs, total)
-    tracks = mood_tracks(music_dir)
+    tracks = mood_tracks(music_dir, log)
     rnd = random.Random(hashlib.md5(str(seed).encode()).hexdigest())
     for m in tracks:
         rnd.shuffle(tracks[m])
@@ -774,12 +777,12 @@ def music_by_script(beats, specs, total, seed="", music_dir=None, log=print):
         log("music by script: " + " | ".join(f"{int(s // 60)}:{int(s % 60):02d} {m}" for s, _, m in secs) +
             f" -> {len(plan)} section(s), {len(set(f for _, _, f in plan))} track(s)")
     else:
-        log("music by script: no files in assets/music/<mood> folders - no music")
+        log("music by script: no files in assets/music - no music")
     return plan
 
 
-def mix_bgm_plan(out, n, talk, plan, mc, log, xf_s=3.0):
-    """Several tracks in turn (music by script): each loops inside its section, 3 s crossfades between them."""
+def mix_bgm_plan(out, n, talk, plan, mc, log, xf_s=6.0):
+    """Several tracks in turn (music by script): each loops inside its section, 6 s slow crossfades between them, each new track starting at its own beginning."""
     bed = np.zeros(n, dtype=np.float32)
     xf = int(xf_s * SR)
     cache = {}

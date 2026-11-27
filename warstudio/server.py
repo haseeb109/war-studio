@@ -559,8 +559,12 @@ def music_list():
     for m in MOODS:                                   # the mood folders for "Auto: by script"
         (MUSIC_DIR / m).mkdir(parents=True, exist_ok=True)
     files = sorted(p.name for p in MUSIC_DIR.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXT)
-    moods = {m: len(v) for m, v in mood_tracks().items() if m != "_any"}
-    return {"folder": str(MUSIC_DIR), "files": files, "moods": moods}
+    from .musicmood import analyse_library
+    lib = analyse_library(MUSIC_DIR, lambda *_: None)          # every file listened to once, then cached
+    moods = {m: sum(1 for a in lib.values() if a["mood"] == m) for m in MOODS}
+    tracks = [{"file": k, "mood": a["mood"], "source": a["source"], "bpm": a.get("features", {}).get("bpm")}
+              for k, a in sorted(lib.items())]
+    return {"folder": str(MUSIC_DIR), "files": files, "moods": moods, "tracks": tracks}
 
 
 @app.post("/api/music/open")

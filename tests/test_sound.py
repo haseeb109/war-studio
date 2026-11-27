@@ -349,19 +349,44 @@ def test_music_by_script_moods_and_crossfaded_tracks(tmp_path):
         t = np.arange(sr * 3) / sr
         sfx.write_wav(tmp_path / m / f"{m}.wav", (0.2 * np.sin(2 * np.pi * hz * t)).astype(np.float32))
     beats, specs = [], []
-    lines = ["The ships waited in silence, a threat nobody could see."] * 40 + \
-            ["Missiles fired, bombs hit, the battle exploded into attack after attack."] * 40 + \
-            ["Hundreds of sailors died. The ship sank and the dead were lost."] * 40
+    lines = ["The ships waited in silence, a threat nobody could see."] * 45 + \
+            ["Missiles fired, bombs hit, the battle exploded into attack after attack."] * 45 + \
+            ["Hundreds of sailors died. The ship sank and the dead were lost."] * 45
     for i, txt in enumerate(lines):
         beats.append({"id": i, "start": i * 2.0, "end": i * 2.0 + 2, "text": txt})
         specs.append({"id": i})
-    secs = sfx.mood_plan(beats, specs, 240.0)
+    secs = sfx.mood_plan(beats, specs, 270.0)
     assert [m for _, _, m in secs] == ["tension", "action", "somber"]
-    plan = sfx.music_by_script(beats, specs, 240.0, seed="x", music_dir=tmp_path, log=lambda *a: None)
+    plan = sfx.music_by_script(beats, specs, 270.0, seed="x", music_dir=tmp_path, log=lambda *a: None)
     assert [Path(f).stem for _, _, f in plan] == ["tension", "action", "somber"]
-    sfx.write_wav(tmp_path / "vo.wav", np.zeros(sr * 240, dtype=np.float32))
+    sfx.write_wav(tmp_path / "vo.wav", np.zeros(sr * 270, dtype=np.float32))
     out = tmp_path / "o.wav"
-    sfx.mix(tmp_path / "vo.wav", [], 240.0, dict(LIVE, sound_mode="three_sounds"), out, music_plan=plan, log=lambda *a: None)
+    sfx.mix(tmp_path / "vo.wav", [], 270.0, dict(LIVE, sound_mode="three_sounds"), out, music_plan=plan, log=lambda *a: None)
     y = sfx.load_audio(out)
     rms = lambda a: float(np.sqrt(np.mean(a.astype(np.float64) ** 2)))
-    assert all(rms(y[int(s * sr):int((s + 1) * sr)]) > 1e-3 for s in (20, 100, 200))
+    assert all(rms(y[int(s * sr):int((s + 1) * sr)]) > 1e-3 for s in (20, 120, 230))
+
+
+def test_music_is_listened_to_and_sorted_by_mood(tmp_path):
+    import numpy as np
+    from warstudio import musicmood
+    sr, T = 22050, 40
+    t = np.arange(sr * T) / sr
+    rng = np.random.default_rng(1)
+    pad = 0.15 * (np.sin(2 * np.pi * 55 * t) + 0.6 * np.sin(2 * np.pi * 65.4 * t) + 0.4 * np.sin(2 * np.pi * 82.4 * t))
+    hits = np.zeros_like(t)
+    for k in range(int(T * 140 / 60)):                       # 140 bpm drum hits
+        i = int(k * sr * 60 / 140)
+        n = min(4000, len(t) - i)
+        hits[i:i + n] += rng.normal(0, 0.6, n) * np.exp(-np.arange(n) / 600)
+    for name, x in (("dark_pad", pad), ("drums", hits + 0.05 * pad)):
+        sfx.write_wav(tmp_path / f"{name}.wav", x.astype(np.float32), sr=sr)
+    (tmp_path / "somber").mkdir()
+    sfx.write_wav(tmp_path / "somber" / "mine.wav", hits.astype(np.float32), sr=sr)
+    lib = musicmood.analyse_library(tmp_path, lambda *a: None)
+    assert lib["drums.wav"]["mood"] == "action"
+    assert lib["dark_pad.wav"]["mood"] in ("tension", "somber")
+    assert lib["somber/mine.wav"]["mood"] == "somber" and lib["somber/mine.wav"]["source"] == "folder"
+    assert (tmp_path / ".analysis.json").exists()
+    tr = sfx.mood_tracks(tmp_path)
+    assert any(f.endswith("drums.wav") for f in tr["action"])
