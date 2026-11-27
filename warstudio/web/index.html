@@ -29,6 +29,29 @@
   input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 11px;font:inherit;transition:border-color .2s,box-shadow .2s}
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-bg)}
   textarea{min-height:300px;resize:vertical;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px}
+  .cr-grid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:16px;align-items:start}
+  @media (max-width:980px){.cr-grid{grid-template-columns:1fr}}
+  .cr-main textarea#script{min-height:56vh}
+  .cr-main h2,.cr-box h3{display:inline-block;margin:0 0 6px;vertical-align:middle}
+  .cr-box h3{font-size:15px}
+  .cr-box{padding:14px 16px;margin-bottom:12px}
+  .cr-side .card:last-child{margin-bottom:0}
+  .cr-step{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--acc-bg);color:var(--acc);
+           font-size:12px;font-weight:700;margin-right:8px;vertical-align:middle}
+  .cr-opt{font-size:11px;font-weight:400;margin-left:4px}
+  .cr-line{display:flex;gap:8px}.cr-line select{flex:1}
+  .btn.icon{padding:0 12px;flex:0 0 auto}
+  .cr-links{display:flex;gap:14px;margin-top:8px;font-size:12px}.cr-links a{color:var(--acc);text-decoration:none}
+  .cr-adv summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--muted)}
+  .cr-adv[open] summary{margin-bottom:4px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{display:inline-flex!important;gap:6px;align-items:center;margin:0!important;padding:5px 10px;border:1px solid var(--line);
+        border-radius:999px;background:var(--panel2);color:var(--text)!important;font-size:12px;cursor:pointer}
+  .chip input{width:auto;margin:0}.chip.wide{margin-top:12px!important}
+  .cr-bar{position:sticky;bottom:0;z-index:5;display:flex;gap:12px;align-items:center;justify-content:flex-end;margin-top:4px;
+          padding:12px 16px;border:1px solid var(--line);border-radius:14px;background:var(--glass);backdrop-filter:blur(14px);box-shadow:var(--shadow)}
+  .cr-bar #crSummary{margin-right:auto}.cr-bar select,.cr-bar input{width:auto}
+  .btn.big{padding:10px 22px;font-size:15px}
   .row{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}.row>*{flex:1;min-width:180px}
   .btn{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-weight:600;cursor:pointer;font-size:13px;white-space:nowrap;transition:transform .12s,filter .2s,background .2s}
   .btn:hover{filter:brightness(1.08)}.btn:active{transform:scale(.97)}
@@ -149,51 +172,53 @@
   </section>
 
   <section id="tab-create" class="hidden">
-    <div class="card">
-      <h2>New video</h2>
-      <label>Title</label>
-      <input id="title" placeholder="Iran fired at U.S. military... then this happened">
-      <label>Script <span class="muted" id="scriptInfo"></span></label>
-      <textarea id="script" placeholder="Paste the full narration script here. Any length: a 5-minute test or a 30-minute video."></textarea>
-      <div class="row">
-        <div>
-          <label>Voice</label>
-          <select id="voiceSel"></select>
+    <div class="cr-grid">
+      <div class="card cr-main">
+        <div class="cr-step">1</div><h2>Story</h2>
+        <label>Title</label>
+        <input id="title" placeholder="Iran fired at U.S. military... then this happened">
+        <label>Script <span class="muted" id="scriptInfo"></span></label>
+        <textarea id="script" placeholder="Paste the full narration script here. Any length: a 5-minute test or a 30-minute video."></textarea>
+      </div>
+      <div class="cr-side">
+        <div class="card cr-box">
+          <div class="cr-step">2</div><h3>Voice</h3>
+          <div class="cr-line"><select id="voiceSel"></select>
+            <button class="btn ghost icon" id="prevBtn" title="Preview voice">&#9654;</button></div>
+          <audio id="player" class="hidden" controls></audio>
         </div>
-        <div style="flex:0 0 auto"><button class="btn ghost" id="prevBtn">&#9654; Preview voice</button></div>
-        <div>
-          <label>Background music <a href="#" id="musicOpen" class="muted" style="font-weight:400">open folder</a> <a href="#" id="musicMoods" class="muted" style="font-weight:400">moods</a></label>
+        <div class="card cr-box">
+          <div class="cr-step">3</div><h3>Music</h3>
           <select id="musicSel"><option value="">No music</option></select>
+          <div class="cr-links"><a href="#" id="musicMoods">See moods</a><a href="#" id="musicOpen">Open folder</a></div>
         </div>
-        <div>
-          <label>Event pack <a href="#" id="eventNew" class="muted" style="font-weight:400">+ new</a> <a href="#" id="eventOpen" class="muted" style="font-weight:400">open folder</a></label>
-          <select id="eventSel" title="Breaking-news footage + screenshots: footage 4x (first in 20 s), screenshots as report cards"><option value="">No event pack</option></select>
+        <div class="card cr-box">
+          <div class="cr-step">4</div><h3>Event pack <span class="muted cr-opt">optional</span></h3>
+          <select id="eventSel" title="Breaking-news footage + screenshots: cold open, footage 4x, screenshots as report cards"><option value="">No event pack</option></select>
+          <div class="cr-links"><a href="#" id="eventNew">+ New pack</a><a href="#" id="eventOpen">Open folder</a></div>
         </div>
-        <div>
+        <details class="card cr-box cr-adv">
+          <summary>Advanced</summary>
           <label>Style / template</label>
           <select id="styleSel"></select>
-        </div>
+          <label>Footage sources</label>
+          <div id="srcBox" class="chips">
+            <label class="chip"><input type="checkbox" class="srcChk" value="library" checked> My Library</label><label class="chip"><input type="checkbox" class="srcChk" value="dvids" checked> DVIDS</label><label class="chip"><input type="checkbox" class="srcChk" value="commons" checked> Wikimedia</label><label class="chip"><input type="checkbox" class="srcChk" value="pexels" checked> Pexels</label><label class="chip"><input type="checkbox" class="srcChk" value="pixabay" checked> Pixabay</label>
+          </div>
+          <label class="chip wide"><input type="checkbox" id="dummy"> Dry run &mdash; silent voice, no AI credits</label>
+        </details>
       </div>
-      <label>Footage sources for this video</label>
-      <div id="srcBox" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
-        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="library" style="width:auto" checked> My Library (first)</label>
-        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="dvids" style="width:auto" checked> DVIDS (US military)</label>
-        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="commons" style="width:auto" checked> Wikimedia Commons</label>
-        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="pexels" style="width:auto" checked> Pexels</label>
-        <label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" class="srcChk" value="pixabay" style="width:auto" checked> Pixabay</label>
-      </div>
-      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="dummy" style="width:auto"> Dry run (silent voice, no AI credits) &mdash; tests footage + render only</label>
-      <div style="margin-top:16px;display:flex;gap:12px;align-items:center">
-        <select id="startWhen" style="width:auto">
-          <option value="0">Start now</option><option value="10">In 10 minutes</option><option value="30">In 30 minutes</option>
-          <option value="60">In 1 hour</option><option value="120">In 2 hours</option><option value="240">In 4 hours</option>
-          <option value="at">At a time…</option>
-        </select>
-        <input type="datetime-local" id="startAt" class="hidden" style="width:auto">
-        <button class="btn" id="startBtn">Start production</button>
-        <span class="muted" id="startMsg"></span>
-      </div>
-      <audio id="player" class="hidden" controls></audio>
+    </div>
+    <div class="cr-bar">
+      <span class="muted" id="crSummary"></span>
+      <span class="muted" id="startMsg"></span>
+      <select id="startWhen">
+        <option value="0">Start now</option><option value="10">In 10 minutes</option><option value="30">In 30 minutes</option>
+        <option value="60">In 1 hour</option><option value="120">In 2 hours</option><option value="240">In 4 hours</option>
+        <option value="at">At a time…</option>
+      </select>
+      <input type="datetime-local" id="startAt" class="hidden">
+      <button class="btn big" id="startBtn">Start production</button>
     </div>
   </section>
 
@@ -1134,6 +1159,20 @@ $("#eventOpen").onclick = async ev => {
   await api(`/api/events/${encodeURIComponent(s)}/open`, {});
 };
 loadEvents();
+function crSummary() {
+  const n = ($("#script").value || "").trim().length, mins = n / 950;
+  const opt = sel => sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text : "";
+  const parts = [];
+  if (n) parts.push(`${n.toLocaleString()} chars · ~${mins < 1 ? "<1" : Math.round(mins)} min`);
+  if ($("#voiceSel").value) parts.push(opt($("#voiceSel")).split("(")[0].trim());
+  parts.push($("#musicSel").value ? (($("#musicSel").value === "auto") ? "music by script" : "1 music track") : "no music");
+  if ($("#eventSel").value) parts.push("event: " + opt($("#eventSel")).split(" (")[0]);
+  if ($("#dummy").checked) parts.push("DRY RUN");
+  $("#crSummary").textContent = parts.join("  ·  ");
+}
+["#script", "#title"].forEach(q => $(q).addEventListener("input", crSummary));
+["#voiceSel", "#musicSel", "#eventSel", "#dummy"].forEach(q => $(q).addEventListener("change", crSummary));
+setTimeout(crSummary, 800);
 function bindMapSample() {
   document.querySelectorAll("[data-mapsample]").forEach(b => b.onclick = async () => {
     let box = $("#mapSampleBox");
