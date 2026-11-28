@@ -4,6 +4,7 @@ One worker thread runs jobs one at a time (the Mac's GPU/encoder is the bottlene
 """
 import json
 import os
+import re
 import queue
 import shutil
 import subprocess
@@ -616,6 +617,55 @@ def _open_folder(d):
     import sys
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(d)])
+
+
+REPORTS_DIR = ROOT / "reports"
+
+
+class ReportIn(BaseModel):
+    note: str = ""
+
+
+@app.post("/api/jobs/{jid}/report")
+def report_issue(jid: str, r: ReportIn):
+    """Pushes this job's full log (+ note + settings snapshot, keys stripped) to GitHub as a markdown file in
+    reports/, committed and pushed with git - so the log reaches the developer without copy-paste or email."""
+    proj = PROJECTS_DIR / jid
+    st = read_json(proj / "status.json", {}) or {}
+    meta = read_json(proj / "project.json", {}) or {}
+    if not st:
+        raise HTTPException(404, "job not found")
+    REPORTS_DIR.mkdir(exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    slug = re.sub(r"[^a-z0-9]+", "-", (meta.get("title") or jid).lower()).strip("-")[:40]
+    fname = f"{stamp}-{slug or jid}.md"
+    code, commit = _git("rev-parse", "--short", "HEAD")
+    settings_safe = {k: v for k, v in (load_settings() or {}).items() if "key" not in k.lower()}
+    lines = [
+        "# Issue report", "",
+        f"- version: {VERSION}  (commit {commit.strip() if code == 0 else 'unknown'})",
+        f"- video: {meta.get('title') or jid}  (job `{jid}`)",
+        f"- state: {st.get('state')}  step: {st.get('step')}",
+        f"- error: {st.get('error') or '-'}",
+        f"- reported: {stamp}", "",
+    ]
+    if r.note.strip():
+        lines += ["## Note from Haseeb", "", r.note.strip(), ""]
+    lines += ["## Settings (keys stripped)", "", "```json", json.dumps(settings_safe, indent=1), "```", "",
+              "## Log", "", "```", *(st.get("log") or []), "```", ""]
+    body = "\n".join(lines)
+    out = REPORTS_DIR / fname
+    out.write_text(body)
+    _git("add", str(out.relative_to(ROOT)))
+    code, msg = _git("commit", "-m", f"report: {meta.get('title') or jid} ({stamp})")
+    if code != 0 and "nothing to commit" not in msg:
+        raise HTTPException(500, "git commit failed: " + msg[-300:])
+    code, msg = _git("push", timeout=60)
+    if code != 0:
+        return {"ok": False, "saved": True, "pushed": False,
+                "error": "Saved locally but could not push (offline or no git access): " + msg[-300:],
+                "file": str(out)}
+    return {"ok": True, "saved": True, "pushed": True, "file": str(out)}
 
 
 @app.post("/api/settings")

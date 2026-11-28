@@ -249,6 +249,7 @@
           <button class="btn ghost" id="markBtn">Mark as reviewed</button>
           <button class="btn ghost" id="openBtn">Open folder</button>
           <button class="btn ghost" id="copyLog">Copy log</button>
+          <button class="btn ghost" id="sendDevBtn" title="Pushes this video's log straight to GitHub - no copy/paste or email">Send to developer</button>
         </div>
         <div class="steps" id="jdSteps"></div>
         <div id="jdTime" style="margin:4px 0 6px"></div>
@@ -940,6 +941,16 @@ $("#copyLog").onclick = async () => {
   const d = await api("/api/jobs/" + CUR_JOB);
   const t = `WarStudio v${STATUS.version} | video ${d.id} | state ${d.status.state} | step ${d.status.step || "-"}\nerror: ${d.status.error || "-"}\n\n` + (d.status.log || []).join("\n");
   try { await navigator.clipboard.writeText(t); toast("Log copied — paste it to Claude"); } catch { toast("Copy failed; select the log text manually"); }
+};
+$("#sendDevBtn").onclick = async () => {
+  const note = prompt("Anything to tell Claude about this issue? (optional)") || "";
+  if (note === null) return;
+  $("#sendDevBtn").disabled = true; toast("Sending log to GitHub...", 4000);
+  try {
+    const d = await api(`/api/jobs/${CUR_JOB}/report`, {note});
+    toast(d.pushed ? "Sent - just tell Claude to check the new report" : ("Saved but not pushed: " + d.error), 8000);
+  } catch (e) { toast("Failed to send: " + e.message, 6000); }
+  $("#sendDevBtn").disabled = false;
 };
 $("#reviewBtn").onclick = () => openReview(CUR_JOB);
 setInterval(() => {
